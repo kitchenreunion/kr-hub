@@ -110,6 +110,8 @@ textarea.in{min-height:72px;resize:vertical}
 .day{display:grid;grid-template-columns:56px 1fr;gap:12px;padding:14px 16px;border-top:1px solid var(--line)}
 .day:first-child{border-top:0}
 .day.today{background:var(--kr-soft)}
+.day.away{box-shadow:inset 5px 0 var(--orange)}
+.where.away{justify-self:start;background:var(--orange-soft);color:var(--orange);padding:3px 10px;border-radius:99px;font-size:14px}
 .day .d b{display:block;font-family:var(--f-display);font-size:24px;line-height:1}
 .day .d span{font-size:13px;color:var(--muted);font-weight:600}
 .items{display:grid;gap:8px;align-content:center;min-width:0}
@@ -364,8 +366,10 @@ function bindWeekNav(onChange){
 }
 
 /* ================================================================ Mein Plan */
+const isAway = it => !CODES.includes(it.value) && S.user.group && S.user.group !== 'Springer' && it.group !== S.user.group;
 function renderItem(it){
   const where = esc(it.group) + (it.section ? ' · ' + esc(it.section) : '');
+  if (isAway(it)) return `<div class="shift"><span class="t">${it.value.split(' ').map(esc).join('<span class="muted"> · </span>')}</span><span class="where away">📍 ${where} – andere Filiale</span></div>`;
   if (CODES.includes(it.value)) return `<div class="shift"><span><span class="chip c-${it.value}">${esc(it.value)}</span></span>${it.value==='Frei'?'':`<span class="where">${where}</span>`}</div>`;
   const t = it.value.split(' ').map(esc).join('<span class="muted"> · </span>');
   return `<div class="shift"><span class="t">${t}</span><span class="where">${where}</span></div>`;
@@ -385,10 +389,10 @@ async function viewPlan(){
     ${!d.exists ? `<div class="card"><p class="empty" style="margin:0">Für diese Woche ist noch kein Dienstplan erstellt.</p></div>` : `
     <div class="card"><div class="sum"><div><span class="label">Dienste</span><b>${n}</b></div><div><span class="label">Stunden geplant</span><b>${fmtH(hrs)}</b></div></div></div>
     <div class="card days">${d.days.map(x => `
-      <div class="day ${x.date===t?'today':''}">
+      <div class="day ${x.date===t?'today':''} ${x.items.some(isAway)?'away':''}">
         <div class="d"><b>${x.day}</b><span>${dm(x.date)}</span></div>
         <div class="items">
-          ${x.items.length ? x.items.map(renderItem).join('') : '<span class="empty">–</span>'}
+          ${x.items.length ? x.items.filter(it => !(it.value==='Frei' && x.items.some(o => !CODES.includes(o.value)))).map(renderItem).join('') : '<span class="empty">–</span>'}
           ${x.wish ? `<span><span class="chip c-${x.wish}">Freiwunsch ${x.wish.toLowerCase()}</span></span>` : ''}
           ${x.notes.map(nt => `<span class="note">${esc(nt.text)}</span>`).join('')}
         </div>
@@ -618,6 +622,9 @@ function demoInit(){
         { name:'Jinmei', days: rot([B,'Frei',A,A,'Frei',C,''],1) },
         { name:'Thapthim', days: rot(['Frei',B,B,'Frei',C,A,''],2) },
         { name:'Thitirat', days: rot([C,C,'Schule',C,B,'Frei',''],3) } ]}] },
+      { group:'Welle 7', notes:['','','','','','',''], sections:[{ label:'', rows:[
+        { name:'Nooyen', days: rot([A,B,A,'Frei',A,B,''],1) },
+        { name:'Arunee', days: rot([A,A,'Frei',B,A,'Frei',''],0).map(v => v==='Frei' ? '11:00-15:00 16:00-21:00' : '') } ]}] },
       { group:'Shoppi Tivoli', notes:['','','','','Sonntagsverkauf-Vorbereitung','',''], sections:[
         { label:'Thai Wok Kitchen', rows:[ { name:'Dean', days: rot([A,A,'Frei',A,D,'Frei',''],0) }, { name:'Michelle', days: rot([B,'Frei',B,B,A,A,''],1) } ]},
         { label:'Guapo Mexicano', rows:[ { name:'Noel', days: rot(['Frei',A,A,'Ferien','Ferien',B,''],0) }, { name:'Dean', days:['','','','','',E,''] } ]},
@@ -669,9 +676,12 @@ async function demoApi(req){
         return { ok:true, data:{ monday:mon, exists:!!bl, days } };
       }
       case 'teamPlan': {
-        const group = req.group && P.groups.includes(req.group) ? req.group : (P.groups.includes(u.group) ? u.group : P.groups[0]);
-        const bl = blocksOf(req.monday), b = bl && bl.find(x => x.group === group);
-        return { ok:true, data:{ monday:req.monday, exists:!!bl, group, groups:P.groups, dates:wkDates(req.monday), sections: b ? b.sections : [], notes: b ? b.notes : [] } };
+        const bl = blocksOf(req.monday);
+        const allowed = P.groups.slice(); (bl||[]).forEach(b => { if (b.sections.some(s => s.rows.some(r => r.name===u.name)) && !allowed.includes(b.group)) allowed.push(b.group); });
+        const groups = GROUPS.filter(g => allowed.includes(g));
+        const group = req.group && groups.includes(req.group) ? req.group : (groups.includes(u.group) ? u.group : groups[0]);
+        const b = bl && bl.find(x => x.group === group);
+        return { ok:true, data:{ monday:req.monday, exists:!!bl, group, groups, dates:wkDates(req.monday), sections: b ? b.sections : [], notes: b ? b.notes : [] } };
       }
       case 'wishList': return { ok:true, data:{ wishes: DB.wishes.filter(w => w.name === u.name), sperr: DB.sperr.filter(s => s.group==='Alle' || s.group===u.group), settings:{ frist:DB.frist, hinweis:DB.hinweis }, today } };
       case 'wishCreate': {
