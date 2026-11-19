@@ -369,7 +369,7 @@ function bindWeekNav(onChange){
 const isAway = it => !CODES.includes(it.value) && S.user.group && S.user.group !== 'Springer' && it.group !== S.user.group;
 function renderItem(it){
   const where = esc(it.group) + (it.section ? ' · ' + esc(it.section) : '');
-  if (isAway(it)) return `<div class="shift"><span class="t">${it.value.split(' ').map(esc).join('<span class="muted"> · </span>')}</span><span class="where away">📍 ${where} – andere Filiale</span></div>`;
+  if (isAway(it)) return `<div class="shift"><span class="t">${it.value.split(' ').map(esc).join('<span class="muted"> · </span>')}</span><span class="where away">📍 ${where}</span></div>`;
   if (CODES.includes(it.value)) return `<div class="shift"><span><span class="chip c-${it.value}">${esc(it.value)}</span></span>${it.value==='Frei'?'':`<span class="where">${where}</span>`}</div>`;
   const t = it.value.split(' ').map(esc).join('<span class="muted"> · </span>');
   return `<div class="shift"><span class="t">${t}</span><span class="where">${where}</span></div>`;
