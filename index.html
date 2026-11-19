@@ -80,7 +80,12 @@ nav.tabs .wrap{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;padding:
 .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .grow{flex:1}
 label.f{display:grid;gap:4px;font-weight:600;font-size:14px}
-input.in,select.in,textarea.in{width:100%;padding:12px;border-radius:10px;border:1px solid var(--line);background:var(--surface)}
+input.in,select.in,textarea.in{width:100%;min-width:0;padding:12px;border-radius:10px;border:1px solid var(--line);background:var(--surface)}
+input.in{display:block;min-height:48px;-webkit-appearance:none;appearance:none}
+input[type=date].in{text-align:left;line-height:22px}
+input[type=date].in::-webkit-date-and-time-value{text-align:left}
+.two{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px}
+.two label.f{min-width:0}
 textarea.in{min-height:72px;resize:vertical}
 .err{color:var(--red);font-weight:600}
 
@@ -530,7 +535,7 @@ async function viewAdmin(){
     <div class="view-head"><h2>Admin</h2></div>
     <div class="label">Tage für Freiwünsche sperren</div>
     <form class="card" id="sperrForm">
-      <div class="row"><label class="f grow">Von<input class="in" type="date" id="spFrom" required min="${t}"></label><label class="f grow">Bis<input class="in" type="date" id="spTo" min="${t}"></label></div>
+      <div class="two"><label class="f">Von<input class="in" type="date" id="spFrom" required min="${t}" value="${t}"></label><label class="f">Bis<input class="in" type="date" id="spTo" min="${t}" value="${t}"></label></div>
       <label class="f">Filiale<select class="in" id="spGroup">${groups.map(g=>`<option>${esc(g)}</option>`).join('')}</select></label>
       <label class="f">Grund (sehen die Mitarbeitenden)<input class="in" id="spReason" maxlength="200" placeholder="z. B. Weihnachtsgeschäft"></label>
       <button class="btn kr" type="submit">Sperren</button>
@@ -542,6 +547,7 @@ async function viewAdmin(){
     <div class="card list">${us.map(u => `<div class="li"><div><b>${esc(u.name)}</b> <span class="muted small">· ${esc(u.role)}${u.filialen.length?' ('+u.filialen.map(esc).join(', ')+')':''}${u.stamm?' · '+esc(u.stamm):''}</span></div>
       <button class="btn ghost sm" data-pin="${esc(u.name)}">${u.pinSet ? 'Neuer PIN' : 'PIN erzeugen'}</button>
       <div class="sub">${u.active ? (u.pinSet ? 'PIN gesetzt am ' + esc(u.pinSet) : '⚠ noch kein PIN') : 'inaktiv'}</div></div>`).join('')}</div>`;
+  $('#spFrom').onchange = () => { const f = $('#spFrom').value, b = $('#spTo'); b.min = f; if (!b.value || b.value < f) b.value = f; };
   $('#sperrForm').onsubmit = async ev => {
     ev.preventDefault();
     try { const r = await call('sperrAdd', { from: $('#spFrom').value, to: $('#spTo').value || $('#spFrom').value, group: $('#spGroup').value, reason: $('#spReason').value });
