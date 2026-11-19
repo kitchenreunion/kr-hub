@@ -683,7 +683,7 @@ async function viewInfo(){
   S.infoData = d; S.infoUnread = d.items.filter(x => x.confirm && !x.read).length; renderTabs();
   $('#view').innerHTML = `
     <div class="view-head"><h2>Infos</h2>${d.canPost ? '<button class="btn kr sm" id="newsNew">+ Mitteilung</button>' : ''}</div>
-    <input class="search" id="infoQ" type="search" placeholder="Suchen, z. B. Notfall, Kasse, Hygiene" value="${esc(S.infoQ)}" aria-label="Infos durchsuchen">
+    <input class="search" id="infoQ" type="search" placeholder="Suchen, z. B. Notfall, Hygiene" value="${esc(S.infoQ)}" aria-label="Infos durchsuchen">
     <div class="chips" id="infoChips"></div>
     <div id="infoList" style="display:grid;gap:12px"></div>`;
   $('#infoQ').oninput = e => { S.infoQ = e.target.value; renderInfoList(); };
@@ -816,7 +816,6 @@ function demoInit(){
       { id:'N2', cat:'News', title:'Weihnachtsstand im Tivoli', text:'Ab Dezember Mittwoch bis Sonntag geöffnet. Einsätze werden im Dienstplan angezeigt.', group:'Shoppi Tivoli', audience:'Alle', important:false, confirm:false, date:todayIso(), by:'Michelle', reads:[] },
       { id:'K1', cat:'Kontakte & Notfall', title:'Notfallnummern', text:'- Sanität: 144\n- Polizei: 117\n- Feuerwehr: 118\n- Tox Info Suisse: 145\n- Rega: 1414', phone:'144', group:'Alle', audience:'Alle', important:true, confirm:false, reads:[] },
       { id:'K2', cat:'Kontakte & Notfall', title:'Operations Manager – Adrian', text:'Bei Fragen zu Dienstplan, Ware und Abläufen.', phone:'079 000 00 00', group:'Alle', audience:'Alle', important:false, confirm:false, reads:[] },
-      { id:'A1', cat:'Abläufe & Regeln', title:'Schliessen der Filiale', text:'- Fritteuse ausschalten und abdecken\n- Kühlschränke kontrollieren (Temperatur notieren)\n- Kasse abschliessen\n- Licht und Lüftung aus', group:'Alle', audience:'Alle', important:false, confirm:false, reads:[] },
       { id:'H1', cat:'HACCP & Hygiene', title:'HACCP-Formular Shoppyland', text:'Täglich bei Arbeitsbeginn ausfüllen.', link:'https://forms.google.com', linkText:'Formular öffnen', group:'Shoppyland', audience:'Alle', important:true, confirm:false, reads:[] },
       { id:'H2', cat:'HACCP & Hygiene', title:'HACCP-Formular Shoppi Tivoli', text:'Täglich bei Arbeitsbeginn ausfüllen.', link:'https://forms.google.com', linkText:'Formular öffnen', group:'Shoppi Tivoli', audience:'Alle', important:true, confirm:false, reads:[] },
     ],
@@ -912,7 +911,7 @@ async function demoApi(req){
         const kad = ['Filialleitung','Admin'].includes(u.role);
         const items = DB.infos.filter(vis).map(x => Object.assign({}, x, { read: x.reads.includes(u.name), readCount: kad ? x.reads.length : undefined, reads: undefined }))
           .sort((a,b) => (b.important - a.important) || (a.cat === 'News' && b.cat === 'News' ? (a.date < b.date ? 1 : -1) : 0));
-        return { ok:true, data:{ items, cats:['News','Kontakte & Notfall','Abläufe & Regeln','HACCP & Hygiene'], canPost:kad, postGroups: u.role === 'Admin' ? ['Alle'].concat(GROUPS) : P.approves } };
+        return { ok:true, data:{ items, cats:['News','Kontakte & Notfall','HACCP & Hygiene'], canPost:kad, postGroups: u.role === 'Admin' ? ['Alle'].concat(GROUPS) : P.approves } };
       }
       case 'infoRead': { const x = DB.infos.find(i => i.id === req.id); if (x && !x.reads.includes(u.name)) x.reads.push(u.name); return { ok:true, data:true }; }
       case 'newsCreate': {
