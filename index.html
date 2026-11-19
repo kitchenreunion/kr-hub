@@ -332,7 +332,7 @@ async function call(action, payload, opts={}){
 }
 
 /* ================================================================ State */
-const S = { user:null, settings:{}, tab:'plan', weeks:[], planMon:null, teamMon:null, teamGroup:null, calMonth:null, openCount:0, infoUnread:0, infoCat:'News', infoQ:'', kaderSub:'ok' };
+const S = { user:null, settings:{}, tab:'plan', weeks:[], planMon:null, teamMon:null, teamGroup:null, calMonth:null, openCount:0, infoUnread:0, infoCat:'News', infoQ:'', kaderSub:'ok', showArchive:false };
 
 /* ================================================================ Login */
 $('#loginForm').addEventListener('submit', async ev => {
@@ -665,9 +665,9 @@ function infoActions(x, d){
   const a = [];
   if (x.phone) a.push(`<a class="callbtn" href="${telHref(x.phone)}">📞 ${esc(x.phone)} anrufen</a>`);
   if (x.link) a.push(`<a class="linkbtn" href="${esc(x.link)}" target="_blank" rel="noopener">${esc(x.linkText || 'Öffnen')} ↗</a>`);
-  if (x.confirm) a.push(x.read ? '<span class="ok" style="color:var(--kr-deep);font-weight:700">✓ Gelesen</span>' : `<button class="btn kr" data-read="${esc(x.id)}">Gelesen ✓</button>`);
+  if (x.cat === 'News' || x.confirm) a.push(x.read ? '<span style="color:var(--kr-deep);font-weight:700">✓ Gelesen</span>' : `<button class="btn kr" data-read="${esc(x.id)}">Gelesen ✓</button>`);
   if (d.canPost && x.confirm) a.push(`<button class="btn ghost sm" data-readers="${esc(x.id)}">Gelesen: ${x.readCount || 0} – wer?</button>`);
-  if (d.canPost && x.cat === 'News' && (S.user.role === 'Admin' || x.by === S.user.name)) a.push(`<button class="btn ghost sm" data-hide="${esc(x.id)}">Ausblenden</button>`);
+  if (d.canPost && x.cat === 'News' && (S.user.role === 'Admin' || x.by === S.user.name)) a.push(`<button class="btn danger sm" data-del-news="${esc(x.id)}">Löschen</button>`);
   return a.length ? `<div class="row">${a.join('')}</div>` : '';
 }
 function renderInfo(x, d){
@@ -695,13 +695,18 @@ function renderInfoList(){
   const unreadBy = c => d.items.filter(x => x.cat === c && x.confirm && !x.read).length;
   $('#infoChips').innerHTML = q ? '' : d.cats.map(c => `<button class="chipbtn" data-cat="${esc(c)}" aria-pressed="${S.infoCat===c}">${esc(CAT_LABEL[c]||c)}${unreadBy(c) ? ` · ${unreadBy(c)} neu` : ''}</button>`).join('');
   document.querySelectorAll('[data-cat]').forEach(b => b.onclick = () => { S.infoCat = b.dataset.cat; renderInfoList(); });
-  const items = q ? d.items.filter(x => (x.title + ' ' + x.text + ' ' + x.cat).toLowerCase().includes(q)) : d.items.filter(x => x.cat === S.infoCat);
-  $('#infoList').innerHTML = items.length ? items.map(x => (q ? `<div class="label">${esc(CAT_LABEL[x.cat]||x.cat)}</div>` : '') + renderInfo(x, d)).join('')
-    : `<div class="card"><p class="empty" style="margin:0">${q ? 'Nichts gefunden.' : 'Noch keine Einträge in dieser Kategorie.'}</p></div>`;
+  let items = q ? d.items.filter(x => (x.title + ' ' + x.text + ' ' + x.cat).toLowerCase().includes(q)) : d.items.filter(x => x.cat === S.infoCat);
+  const archived = (!q && S.infoCat === 'News') ? items.filter(x => x.read && x.by !== S.user.name) : [];
+  if (archived.length) items = items.filter(x => !archived.includes(x));
+  const arch = archived.length ? `<button class="btn ghost" id="archToggle">${S.showArchive ? 'Gelesene Mitteilungen ausblenden' : `Gelesene Mitteilungen anzeigen (${archived.length})`}</button>
+    ${S.showArchive ? archived.map(x => renderInfo(x, d)).join('') : ''}` : '';
+  $('#infoList').innerHTML = (items.length ? items.map(x => (q ? `<div class="label">${esc(CAT_LABEL[x.cat]||x.cat)}</div>` : '') + renderInfo(x, d)).join('')
+    : `<div class="card"><p class="empty" style="margin:0">${q ? 'Nichts gefunden.' : S.infoCat === 'News' && archived.length ? 'Alles gelesen. 👍' : 'Noch keine Einträge in dieser Kategorie.'}</p></div>`) + arch;
+  const at = $('#archToggle'); if (at) at.onclick = () => { S.showArchive = !S.showArchive; renderInfoList(); };
   document.querySelectorAll('[data-read]').forEach(b => b.onclick = async () => {
     b.disabled = true;
     try { await call('infoRead', { id: b.dataset.read }); const x = d.items.find(i => i.id === b.dataset.read); x.read = true; if (d.canPost) x.readCount = (x.readCount||0) + 1;
-      S.infoUnread = d.items.filter(i => i.confirm && !i.read).length; renderTabs(); renderInfoList(); toast('Danke, als gelesen bestätigt'); }
+      S.infoUnread = d.items.filter(i => i.confirm && !i.read).length; renderTabs(); renderInfoList(); toast(x.by === S.user.name ? 'Als gelesen markiert' : 'Erledigt – unter «Gelesene Mitteilungen» findest du sie wieder'); }
     catch(e){ b.disabled = false; }
   });
   document.querySelectorAll('[data-readers]').forEach(b => b.onclick = async () => {
@@ -712,9 +717,9 @@ function renderInfoList(){
         <button class="btn ghost" data-close>Schliessen</button>`);
     } catch(e){}
   });
-  document.querySelectorAll('[data-hide]').forEach(b => b.onclick = () => openSheet(`<h3>Mitteilung ausblenden?</h3><p style="margin:0">Sie verschwindet für alle aus dem Hub. Im Blatt «Infos» bleibt sie erhalten (Aktiv = Nein).</p>
-    <div class="row"><button class="btn ghost grow" data-close>Abbrechen</button><button class="btn danger grow" id="hideGo">Ausblenden</button></div>`,
-    () => { $('#hideGo').onclick = async () => { try { await call('newsHide', { id: b.dataset.hide }); closeSheet(); toast('Ausgeblendet'); viewInfo(); } catch(e){} }; }));
+  document.querySelectorAll('[data-del-news]').forEach(b => b.onclick = () => openSheet(`<h3>Mitteilung löschen?</h3><p style="margin:0">Sie wird für alle endgültig gelöscht, zusammen mit den Lesebestätigungen. Das lässt sich nicht rückgängig machen.</p>
+    <div class="row"><button class="btn ghost grow" data-close>Abbrechen</button><button class="btn danger grow" id="delGo">Löschen</button></div>`,
+    () => { $('#delGo').onclick = async () => { $('#delGo').disabled = true; try { await call('newsDelete', { id: b.dataset.delNews }); closeSheet(); toast('Mitteilung gelöscht'); viewInfo(); } catch(e){ $('#delGo').disabled = false; } }; }));
 }
 function newsDialog(){
   const groups = S.infoData.postGroups;
@@ -915,6 +920,7 @@ async function demoApi(req){
         DB.infos.push({ id:'N'+Date.now(), cat:'News', title:req.title, text:req.text, group:req.group, audience:req.kader?'Kader':'Alle', important:!!req.important, confirm:!!req.confirm, date:todayIso(), by:u.name, reads:[u.name] });
         return { ok:true, data:true };
       }
+      case 'newsDelete': DB.infos = DB.infos.filter(i => i.id !== req.id); return { ok:true, data:true };
       case 'newsHide': { const x = DB.infos.find(i => i.id === req.id); if (x) x.active = false; return { ok:true, data:true }; }
       case 'newsReaders': { const x = DB.infos.find(i => i.id === req.id); const aud = DB.users.filter(p => x.group === 'Alle' || p.group === x.group || p.role === 'Admin').map(p => p.name);
         return { ok:true, data:{ read: aud.filter(n => x.reads.includes(n)).map(n => ({ name:n })), open: aud.filter(n => !x.reads.includes(n)) } }; }
