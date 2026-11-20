@@ -324,7 +324,184 @@ async function api(action, payload={}){
     res = await r.json();
   }
   if (!res.ok) { const e = new Error(res.error || 'Fehler'); e.auth = res.auth; throw e; }
+  if (res.views) fbApply(res.views);
+  if (INVALIDATE[action]) invalidate(action);
   return res.data;
+}
+/* ================================================================ Firebase (schnelles Lesen, live)
+   Das Apps Script legt pro Person fertige Ansichten in Firestore ab. Die App liest dort –
+   sofort, live und offline. Fehlt etwas, fragt sie wie bisher das Apps Script. */
+const FIREBASE_CONFIG = {
+  apiKey: 'AIzaSyBJfA7Knm81nvchuAE7LrCu37kYxwQnpDw',
+  authDomain: 'kr-hub.firebaseapp.com',
+  projectId: 'kr-hub',
+  storageBucket: 'kr-hub.firebasestorage.app',
+  messagingSenderId: '742134042660',
+  appId: '1:742134042660:web:730a401d240b770d06c8b1',
+};
+const FB_SDK = 'https://www.gstatic.com/firebasejs/10.14.1/';
+const FBX = { on:false, mods:null, starting:null, main:null, mainSeen:false, weeks:{}, weeksSeen:false, unsub:[], firstWait:[], pending:false, t:null };
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+async function fbLoad(){
+  if (FBX.mods) return FBX.mods;
+  const [app, auth, fs] = await Promise.all(['firebase-app.js','firebase-auth.js','firebase-firestore.js'].map(f => import(FB_SDK + f)));
+  const a = app.getApps().length ? app.getApp() : app.initializeApp(FIREBASE_CONFIG);
+  let db;
+  try { db = fs.initializeFirestore(a, { localCache: fs.persistentLocalCache({ tabManager: fs.persistentMultipleTabManager() }) }); }
+  catch(e) { db = fs.getFirestore(a); }
+  const au = auth.getAuth(a);
+  return (FBX.mods = { app, auth, fs, a, db, au });
+}
+function fbStart(customToken){
+  if (DEMO || !FIREBASE_CONFIG.apiKey || !S.user || !S.user.uid) return Promise.resolve(false);
+  const g = GEN;
+  FBX.starting = (async () => {
+    try {
+      const m = await fbLoad();
+      if (m.au.authStateReady) await m.au.authStateReady();
+      if (!m.au.currentUser || m.au.currentUser.uid !== S.user.uid) {
+        let tok = customToken;
+        if (!tok) { const r = await api('fbToken'); tok = r && r.token; }
+        if (!tok) return false; // Firebase im Apps Script noch nicht eingerichtet → wie bisher
+        await m.auth.signInWithCustomToken(m.au, tok);
+      }
+      if (g !== GEN) return false;
+      fbSubscribe(m, S.user.uid);
+      FBX.on = true;
+      return true;
+    } catch(e) {
+      if (e.auth) { logout(true); return false; }
+      console.warn('Firebase nicht verfügbar – App nutzt das Apps Script.', e);
+      return false;
+    }
+  })();
+  return FBX.starting;
+}
+function fbSubscribe(m, uid){
+  fbUnsub();
+  const { fs, db } = m;
+  const done = () => { if (FBX.mainSeen && FBX.weeksSeen) { FBX.firstWait.forEach(f => f()); FBX.firstWait = []; } };
+  const fail = e => { console.warn('Firestore:', e && e.code); FBX.on = false; fbUnsub(); api('me').catch(err => { if (err.auth) logout(true); }); };
+  FBX.unsub.push(fs.onSnapshot(fs.doc(db, 'views', uid), snap => {
+    FBX.main = snap.exists() ? JSON.parse(snap.data().json) : null;
+    FBX.mainSeen = true; done(); fbChanged();
+  }, fail));
+  FBX.unsub.push(fs.onSnapshot(fs.collection(db, 'views', uid, 'w'), qs => {
+    qs.docChanges().forEach(ch => { if (ch.type === 'removed') delete FBX.weeks[ch.doc.id]; else FBX.weeks[ch.doc.id] = JSON.parse(ch.doc.data().json); });
+    FBX.weeksSeen = true; done(); fbChanged();
+  }, fail));
+}
+function fbUnsub(){ FBX.unsub.forEach(f => { try { f(); } catch(e) {} }); FBX.unsub = []; }
+async function fbStop(){
+  FBX.on = false; fbUnsub(); FBX.main = null; FBX.weeks = {}; FBX.mainSeen = FBX.weeksSeen = false; FBX.starting = null;
+  const m = FBX.mods; if (!m) return;
+  try { await m.auth.signOut(m.au); } catch(e) {}
+  try { await m.fs.terminate(m.db); await m.fs.clearIndexedDbPersistence(m.db); } catch(e) {}
+  FBX.mods = null;
+}
+function fbFirst(){
+  if (FBX.mainSeen && FBX.weeksSeen) return Promise.resolve();
+  return Promise.race([new Promise(r => FBX.firstWait.push(r)), sleep(6000)]);
+}
+/* Antwort einer Änderung enthält die frischen Ansichten → sofort übernehmen */
+function fbApply(v){
+  if (!v || !FBX.on) return;
+  if (v.main) FBX.main = JSON.parse(v.main);
+  Object.entries(v.weeks || {}).forEach(([k, j]) => { FBX.weeks[k] = JSON.parse(j); });
+}
+const clone = o => JSON.parse(JSON.stringify(o));
+function fbGet(action, p){
+  const M = FBX.main; if (!FBX.on || !M) return undefined;
+  switch (action) {
+    case 'me': return M.me;
+    case 'wishList': return M.wishList;
+    case 'infos': return M.infos;
+    case 'approvals': return M.approvals;
+    case 'adminPage': return M.sperrList && M.adminUsers ? { sp: M.sperrList, us: M.adminUsers } : undefined;
+    case 'myPlan': { const w = FBX.weeks[p.monday]; return w ? w.my : undefined; }
+    case 'teamPlan': {
+      const w = FBX.weeks[p.monday]; if (!w) return undefined;
+      const t = w.team, g = t.groups.includes(p.group) ? p.group : t.def;
+      return Object.assign({ monday: t.monday, group: g || '', groups: t.groups, dates: t.dates }, g && t.by[g] ? t.by[g] : { exists: false });
+    }
+  }
+  return undefined;
+}
+/* Lesen: zuerst Firestore, sonst Apps Script */
+async function getData(action, payload={}){
+  if (FBX.starting) await Promise.race([FBX.starting, sleep(8000)]);
+  if (FBX.on) { await fbFirst(); const d = fbGet(action, payload); if (d !== undefined) return clone(d); }
+  if (action === 'adminPage') { const [sp, us] = await Promise.all([api('sperrList'), api('adminUsers')]); return { sp, us }; }
+  return api(action, payload);
+}
+/* Live-Aktualisierung: aktuelle Ansicht neu zeichnen (nicht während Eingaben) */
+function fbChanged(){
+  clearTimeout(FBX.t);
+  FBX.t = setTimeout(() => {
+    if (!S.user || !FBX.main) return;
+    const me = FBX.main.me;
+    if (me && JSON.stringify(me.user) !== JSON.stringify(S.user)) { S.user = me.user; S.settings = me.settings; saveUser(); }
+    S.infoUnread = (FBX.main.infos?.items || []).filter(x => x.confirm && !x.read).length;
+    if (FBX.main.approvals) S.openCount = FBX.main.approvals.open.length;
+    const busy = $('#sheetHost').innerHTML || ['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName);
+    if (busy) { FBX.pending = true; renderTabs(); return; }
+    FBX.pending = false;
+    const y = window.scrollY;
+    renderTabs();
+    Promise.resolve(({plan:viewPlan, team:viewTeam, wish:viewWish, info:viewInfo, kader:viewKader})[S.tab]?.()).then(() => window.scrollTo(0, y));
+  }, 60);
+}
+function saveUser(){ try { localStorage.setItem('krhub_user', JSON.stringify({ user: S.user, settings: S.settings })); } catch(e) {} }
+
+/* ---------- Zwischenspeicher: sofort anzeigen, im Hintergrund aktualisieren */
+const CACHE = new Map();
+let GEN = 0; // Sitzungs-Zähler: Antworten aus einer früheren Anmeldung werden verworfen
+const INVALIDATE = {
+  wishCreate:['wishList','myPlan','approvals'], wishCancel:['wishList','myPlan','approvals'],
+  decide:['approvals','teamPlan','myPlan','wishList'], sperrAdd:['adminPage','wishList'], sperrDelete:['adminPage','wishList'],
+  adminSetPin:['adminPage'], infoRead:['infos'], newsCreate:['infos'], newsHide:['infos'], newsDelete:['infos'],
+};
+const cacheKey = (action, payload) => action + '|' + JSON.stringify(payload || {});
+const cacheStoreKey = () => 'krhub_cache_' + (S.user ? S.user.name : '');
+function loadCache(){
+  try { const raw = localStorage.getItem(cacheStoreKey()); if (raw) Object.entries(JSON.parse(raw)).forEach(([k, v]) => CACHE.set(k, v)); } catch(e) {}
+}
+let saveT = null;
+function saveCache(){
+  clearTimeout(saveT);
+  saveT = setTimeout(() => { try { const o = {}; [...CACHE.entries()].slice(-40).forEach(([k, v]) => { o[k] = v; }); localStorage.setItem(cacheStoreKey(), JSON.stringify(o)); } catch(e) {} }, 400);
+}
+function putCache(k, d){ const json = JSON.stringify(d); const old = CACHE.get(k); CACHE.delete(k); CACHE.set(k, { json, data: JSON.parse(json) }); saveCache(); return !old || old.json !== json; }
+function invalidate(action){
+  const pre = INVALIDATE[action]; if (!pre) return;
+  [...CACHE.keys()].forEach(k => { if (pre.some(p => k.startsWith(p + '|'))) CACHE.delete(k); });
+  saveCache(); if (!FBX.on) { clearTimeout(S.prefetchT); S.prefetchT = setTimeout(prefetch, 1500); }
+}
+async function cachedApi(action, payload){ const g = GEN; const d = await getData(action, payload); if (g !== GEN) throw new Error('Sitzung gewechselt'); putCache(cacheKey(action, payload), d); return d; }
+async function swr(action, payload, isCurrent, render, errMsg, target, fetcher){
+  const el = target || (() => $('#view'));
+  const k = cacheKey(action, payload), hit = CACHE.get(k), g = GEN;
+  if (hit) render(JSON.parse(hit.json)); else el().innerHTML = '<div class="spinner" aria-label="Lädt"></div>';
+  try {
+    const d = fetcher ? await fetcher() : await getData(action, payload);
+    if (g !== GEN) return;
+    const changed = putCache(k, d);
+    if (isCurrent() && changed) render(d);
+    return d;
+  } catch(e){
+    if (e.auth) { logout(true); return; }
+    if (!hit) { if (isCurrent() && el()) el().innerHTML = `<p class="empty">${errMsg}</p>`; toast(e.message, 5000); }
+  }
+}
+async function prefetch(){
+  if (!S.user || FBX.on) return;
+  const jobs = [['myPlan', { monday: S.planMon }], ['teamPlan', { monday: S.teamMon, group: S.teamGroup }], ['wishList', {}], ['infos', {}],
+    ['myPlan', { monday: isoOf(addDays(parseIso(S.planMon), 7)) }]];
+  if (['Filialleitung','Admin'].includes(S.user.role)) jobs.push(['approvals', {}]);
+  for (const [a, p] of jobs) { if (!S.user) return; if (CACHE.has(cacheKey(a, p))) continue; try { await cachedApi(a, p); } catch(e) {} }
+  if (S.user && S.user.role === 'Admin' && !CACHE.has(cacheKey('adminPage', {}))) {
+    const g = GEN; try { const [sp, us] = await Promise.all([api('sperrList'), api('adminUsers')]); if (g === GEN) putCache(cacheKey('adminPage', {}), { sp, us }); } catch(e) {}
+  }
 }
 async function call(action, payload, opts={}){
   try { return await api(action, payload); }
@@ -341,40 +518,52 @@ $('#loginForm').addEventListener('submit', async ev => {
   try {
     const d = await api('login', { name: $('#lgName').value, pin: $('#lgPin').value });
     TOKEN = d.token; try { localStorage.setItem('krhub_token', TOKEN); } catch(e) {}
-    S.user = d.user; S.settings = d.settings; $('#lgPin').value='';
-    await startApp();
+    S.user = d.user; S.settings = d.settings; $('#lgPin').value=''; saveUser();
+    await startApp(d.fb);
   } catch(e){ $('#lgErr').textContent = e.message; }
   finally { $('#lgBtn').disabled = false; }
 });
 
 function logout(expired){
   if (TOKEN && !expired) api('logout').catch(()=>{});
-  TOKEN = null; try { localStorage.removeItem('krhub_token'); } catch(e) {}
-  S.user = null; closeSheet();
+  TOKEN = null; try { localStorage.removeItem('krhub_token'); localStorage.removeItem('krhub_user'); localStorage.removeItem(cacheStoreKey()); } catch(e) {}
+  CACHE.clear(); GEN++; S.user = null; closeSheet();
+  if (FBX.mods) { try { if (expired) sessionStorage.setItem('krhub_expired', '1'); } catch(e) {} fbStop().finally(() => location.reload()); }
   $('#app').hidden = true; $('#login').hidden = false;
   if (expired) $('#lgErr').textContent = 'Bitte neu anmelden.';
 }
 
 async function boot(){
   $('#demoHint').hidden = !DEMO; $('#demoBand').hidden = !DEMO;
+  try { if (sessionStorage.getItem('krhub_expired')) { sessionStorage.removeItem('krhub_expired'); $('#lgErr').textContent = 'Bitte neu anmelden.'; } } catch(e) {}
   if (TOKEN) {
-    try { const d = await api('me'); S.user = d.user; S.settings = d.settings; return startApp(); }
+    // Schnellstart: zuletzt bekannte Person sofort anzeigen, Anmeldung im Hintergrund prüfen
+    let saved = null; try { saved = JSON.parse(localStorage.getItem('krhub_user') || 'null'); } catch(e) {}
+    if (saved && saved.user && saved.user.uid && !DEMO) {
+      S.user = saved.user; S.settings = saved.settings || {};
+      api('me').then(d => { if (!S.user) return; const ch = JSON.stringify(d.user) !== JSON.stringify(S.user); S.user = d.user; S.settings = d.settings; saveUser(); if (ch) renderTabs(); })
+        .catch(e => { if (e.auth) logout(true); });
+      return startApp();
+    }
+    try { const d = await api('me'); S.user = d.user; S.settings = d.settings; saveUser(); return startApp(); }
     catch(e) { TOKEN = null; try { localStorage.removeItem('krhub_token'); } catch(_) {} }
   }
   $('#login').hidden = false;
   hideSplash();
 }
 
-async function startApp(){
+async function startApp(fbToken){
   $('#login').hidden = true; $('#app').hidden = false;
   $('#avatarBtn').textContent = S.user.name.slice(0,2).toUpperCase();
-  S.weeks = await call('weeks').catch(()=>[]);
+  GEN++; CACHE.clear(); loadCache();
+  fbStart(fbToken);
   const cur = isoOf(mondayOf(new Date()));
   S.planMon = S.teamMon = cur;
   S.teamGroup = S.user.groups.includes(S.user.group) ? S.user.group : S.user.groups[0];
   renderTabs();
   try { await go(S.tab); } finally { hideSplash(); }
-  refreshBadge();
+  await refreshBadge();
+  prefetch();
 }
 
 /* ================================================================ Tabs */
@@ -403,8 +592,12 @@ function go(tab){
   return ({plan:viewPlan, team:viewTeam, wish:viewWish, info:viewInfo, kader:viewKader})[tab]();
 }
 async function refreshBadge(){
-  try { const d = await api('infos'); S.infoUnread = d.items.filter(x => x.confirm && !x.read).length; } catch(e) {}
-  if (['Filialleitung','Admin'].includes(S.user.role)) { try { const d = await api('approvals'); S.openCount = d.open.length; } catch(e) {} }
+  const ki = CACHE.get(cacheKey('infos', {})), ka = CACHE.get(cacheKey('approvals', {}));
+  if (ki) S.infoUnread = ki.data.items.filter(x => x.confirm && !x.read).length;
+  if (ka) S.openCount = ka.data.open.length;
+  renderTabs();
+  try { const d = await cachedApi('infos', {}); S.infoUnread = d.items.filter(x => x.confirm && !x.read).length; } catch(e) {}
+  if (['Filialleitung','Admin'].includes(S.user.role)) { try { const d = await cachedApi('approvals', {}); S.openCount = d.open.length; } catch(e) {} }
   renderTabs();
   if (S.tab === 'plan') { const b = $('#newsBanner'); if (b) planBanner(); }
 }
@@ -434,12 +627,11 @@ function renderItem(it){
   const t = it.value.split(' ').map(esc).join('<span class="muted"> · </span>');
   return `<div class="shift"><span class="t">${t}</span><span class="where">${where}</span></div>`;
 }
-async function viewPlan(){
-  loading();
+function viewPlan(){
   const mon = S.planMon;
-  const d = await call('myPlan', { monday: mon }).catch(()=>null);
-  if (S.tab !== 'plan') return;
-  if (!d) { $('#view').innerHTML = '<p class="empty">Plan konnte nicht geladen werden.</p>'; return; }
+  return swr('myPlan', { monday: mon }, () => S.tab === 'plan' && S.planMon === mon, d => renderPlan(d, mon), 'Plan konnte nicht geladen werden.');
+}
+function renderPlan(d, mon){
   let hrs = 0, n = 0;
   d.days.forEach(x => x.items.forEach(it => { const h = shiftHours(it.value); if (h) { hrs += h; n++; } }));
   const t = todayIso();
@@ -464,11 +656,11 @@ async function viewPlan(){
 }
 
 /* ================================================================ Team */
-async function viewTeam(){
-  loading();
-  const d = await call('teamPlan', { monday: S.teamMon, group: S.teamGroup }).catch(()=>null);
-  if (S.tab !== 'team') return;
-  if (!d) { $('#view').innerHTML = '<p class="empty">Plan konnte nicht geladen werden.</p>'; return; }
+function viewTeam(){
+  const mon = S.teamMon, g = S.teamGroup;
+  return swr('teamPlan', { monday: mon, group: g }, () => S.tab === 'team' && S.teamMon === mon && (S.teamGroup === g || !g), renderTeam, 'Plan konnte nicht geladen werden.');
+}
+function renderTeam(d){
   S.teamGroup = d.group;
   const t = todayIso();
   const head = `<tr><th>Name</th>${d.dates.map((x,i)=>`<th class="${x===t?'today':''}">${DAYS[i]}<br><span class="muted">${dm(x)}</span></th>`).join('')}</tr>`;
@@ -488,11 +680,10 @@ async function viewTeam(){
 }
 
 /* ================================================================ Freiwünsche */
-async function viewWish(){
-  loading();
-  const d = await call('wishList').catch(()=>null);
-  if (S.tab !== 'wish') return;
-  if (!d) { $('#view').innerHTML = '<p class="empty">Freiwünsche konnten nicht geladen werden.</p>'; return; }
+function viewWish(){
+  return swr('wishList', {}, () => S.tab === 'wish', renderWish, 'Freiwünsche konnten nicht geladen werden.');
+}
+function renderWish(d){
   S.wishData = d;
   if (!S.calMonth) { const m = parseIso(isoOf(addDays(new Date(), d.settings.frist))); S.calMonth = `${m.getFullYear()}-${pad(m.getMonth()+1)}`; }
   const minIso = isoOf(addDays(parseIso(d.today), d.settings.frist));
@@ -563,12 +754,12 @@ function viewKader(){
   document.querySelectorAll('[data-sub]').forEach(b => b.onclick = () => { S.kaderSub = b.dataset.sub; viewKader(); });
   (S.kaderSub === 'admin' ? viewAdmin : viewApprove)();
 }
-async function viewApprove(){
+function viewApprove(){
   if (!kb()) return viewKader();
-  kb().innerHTML = '<div class="spinner" aria-label="Lädt"></div>';
-  const d = await call('approvals').catch(()=>null);
-  if (S.tab !== 'kader' || S.kaderSub !== 'ok' || !kb()) return;
-  if (!d) { kb().innerHTML = '<p class="empty">Konnte nicht geladen werden.</p>'; return; }
+  return swr('approvals', {}, () => S.tab === 'kader' && S.kaderSub === 'ok' && !!kb(), renderApprove, 'Konnte nicht geladen werden.', kb);
+}
+function renderApprove(d){
+  if (!kb()) return;
   if (S.openCount !== d.open.length) { S.openCount = d.open.length; renderTabs(); }
   kb().innerHTML = `
     <div class="label">${d.open.length} offene Freiwünsche</div>
@@ -602,11 +793,12 @@ async function decide(id, decision, answer){
 }
 
 /* ================================================================ Admin */
-async function viewAdmin(){
+function viewAdmin(){
   if (!kb()) return viewKader();
-  kb().innerHTML = '<div class="spinner" aria-label="Lädt"></div>';
-  const [sp, us] = await Promise.all([call('sperrList').catch(()=>[]), call('adminUsers').catch(()=>[])]);
-  if (S.tab !== 'kader' || S.kaderSub !== 'admin' || !kb()) return;
+  return swr('adminPage', {}, () => S.tab === 'kader' && S.kaderSub === 'admin' && !!kb(), d => renderAdmin(d.sp, d.us), 'Konnte nicht geladen werden.', kb);
+}
+function renderAdmin(sp, us){
+  if (!kb()) return;
   const groups = ['Alle'].concat(S.user.groups);
   const t = todayIso();
   kb().innerHTML = `
@@ -675,11 +867,10 @@ function renderInfo(x, d){
   if (x.cat === 'News' || x.cat === 'Kontakte & Notfall') return `<div class="${cls}">${infoMeta(x)}<h3>${esc(x.title)}</h3><div class="info-text">${fmtText(x.text)}</div>${infoActions(x, d)}</div>`;
   return `<details class="${cls}" ${x.important ? 'open' : ''}><summary>${x.important ? '★ ' : ''}${esc(x.title)}</summary>${infoMeta(x)}<div class="info-text">${fmtText(x.text)}</div>${infoActions(x, d)}</details>`;
 }
-async function viewInfo(){
-  loading();
-  const d = await call('infos').catch(()=>null);
-  if (S.tab !== 'info') return;
-  if (!d) { $('#view').innerHTML = '<p class="empty">Infos konnten nicht geladen werden.</p>'; return; }
+function viewInfo(){
+  return swr('infos', {}, () => S.tab === 'info', renderInfoView, 'Infos konnten nicht geladen werden.');
+}
+function renderInfoView(d){
   S.infoData = d; S.infoUnread = d.items.filter(x => x.confirm && !x.read).length; renderTabs();
   $('#view').innerHTML = `
     <div class="view-head"><h2>Infos</h2>${d.canPost ? '<button class="btn kr sm" id="newsNew">+ Mitteilung</button>' : ''}</div>
@@ -753,7 +944,8 @@ $('#avatarBtn').onclick = () => openSheet(`<h3>${esc(S.user.name)}</h3>
   () => {
     $('#logoutBtn').onclick = () => logout(false);
     $('#pinForm').onsubmit = async ev => { ev.preventDefault();
-      try { await call('changePin', { oldPin: $('#pOld').value, newPin: $('#pNew').value }); closeSheet(); toast('PIN geändert'); } catch(e){} };
+      try { const r = await call('changePin', { oldPin: $('#pOld').value, newPin: $('#pNew').value }); closeSheet(); toast('PIN geändert');
+        if (r && r.fb && FBX.mods) { try { await FBX.mods.auth.signInWithCustomToken(FBX.mods.au, r.fb); } catch(e) {} } } catch(e){} };
   });
 
 /* ================================================================ Bottom sheet */
@@ -766,7 +958,7 @@ function openSheet(html, bind, onClose){
   if (bind) bind();
   const f = $('#sheetHost').querySelector('textarea,input,button:not([data-close])'); if (f) f.focus();
 }
-function closeSheet(){ $('#sheetHost').innerHTML = ''; if (onSheetClose) { const f = onSheetClose; onSheetClose = null; f(); } }
+function closeSheet(){ $('#sheetHost').innerHTML = ''; if (onSheetClose) { const f = onSheetClose; onSheetClose = null; f(); } if (FBX.pending) fbChanged(); }
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeSheet(); });
 
 /* ================================================================ Demo-Backend (nur ohne API_URL) */
