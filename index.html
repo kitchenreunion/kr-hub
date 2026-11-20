@@ -224,6 +224,38 @@ details.info-card[open] summary::after{content:"−"}
 .spinner{width:22px;height:22px;border:3px solid var(--line);border-top-color:var(--kr);border-radius:50%;animation:spin .8s linear infinite;margin:24px auto}
 @keyframes spin{to{transform:rotate(360deg)}}
 @media (prefers-reduced-motion:reduce){.spinner{animation-duration:2s}}
+/* HACCP */
+.hc-st{display:grid;grid-template-columns:1fr auto;gap:6px 12px;align-items:center}
+.hc-st .meta{grid-column:1/-1;font-size:14px;color:var(--muted)}
+.hc-due{color:var(--red);font-weight:700}
+.hc-prog{height:6px;background:var(--grey-soft);border-radius:99px;overflow:hidden}
+.hc-prog i{display:block;height:100%;background:var(--kr)}
+.hc-item{display:grid;grid-template-columns:1fr auto;gap:8px 10px;align-items:center;padding:12px 0;border-top:1px solid var(--line)}
+.hc-item:first-of-type{border-top:0}
+.hc-item .nm{font-weight:700;min-width:0;overflow-wrap:anywhere}
+.hc-item .nm small{display:block;font-weight:400;color:var(--muted);font-size:13px}
+.hc-item .ctl{display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
+.hc-item .full{grid-column:1/-1}
+.hc-item.bad .nm{color:var(--red)}
+.hc-item.bad .tin{border-color:var(--red);background:var(--red-soft);color:var(--red)}
+.hc-item .note{display:none}
+.hc-item.bad .note{display:block}
+.tin{width:84px;text-align:right;border:1px solid var(--line);border-radius:10px;padding:10px;background:var(--surface);font-family:var(--f-mono);font-weight:600}
+.tin:disabled{opacity:.4}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.seg button{border:0;background:var(--surface);padding:9px 12px;font-weight:700;font-size:14px;cursor:pointer;border-left:1px solid var(--line)}
+.seg button:first-child{border-left:0}
+.seg button[aria-pressed="true"]{background:var(--ink);color:var(--bg)}
+.seg button.okb[aria-pressed="true"]{background:var(--kr);color:var(--kr-ink)}
+.seg button.badb[aria-pressed="true"]{background:var(--red);color:#fff}
+.tog{border:1px solid var(--line);background:var(--surface);border-radius:10px;padding:9px 10px;font-size:13px;font-weight:700;cursor:pointer;color:var(--muted)}
+.tog[aria-pressed="true"]{background:var(--grey-soft);color:var(--ink);border-color:var(--ink)}
+.hc-clean{display:flex;gap:10px;align-items:flex-start;padding:10px 0;border-top:1px solid var(--line);cursor:pointer}
+.hc-clean:first-of-type{border-top:0}
+.hc-clean input{width:22px;height:22px;margin:0;flex:none;accent-color:var(--kr-deep)}
+.hc-err{color:var(--red);font-weight:700;font-size:14px}
+.hc-dev{border-left:4px solid var(--red)}
+.hc-sum{display:flex;gap:16px;flex-wrap:wrap}
 </style>
 </head>
 <body>
@@ -417,6 +449,8 @@ function fbGet(action, p){
     case 'wishList': return M.wishList;
     case 'infos': return M.infos;
     case 'approvals': return M.approvals;
+    case 'haccp': return M.haccp;
+    case 'haccpKader': return M.haccpKader;
     case 'adminPage': return M.sperrList && M.adminUsers ? { sp: M.sperrList, us: M.adminUsers } : undefined;
     case 'myPlan': { const w = FBX.weeks[p.monday]; return w ? w.my : undefined; }
     case 'teamPlan': {
@@ -459,7 +493,7 @@ let GEN = 0; // Sitzungs-Zähler: Antworten aus einer früheren Anmeldung werden
 const INVALIDATE = {
   wishCreate:['wishList','myPlan','approvals'], wishCancel:['wishList','myPlan','approvals'],
   decide:['approvals','teamPlan','myPlan','wishList'], sperrAdd:['adminPage','wishList'], sperrDelete:['adminPage','wishList'],
-  adminSetPin:['adminPage'], infoRead:['infos'], newsCreate:['infos'], newsHide:['infos'], newsDelete:['infos'],
+  adminSetPin:['adminPage'], haccpSubmit:['haccp','haccpKader'], haccpAck:['haccpKader'], infoRead:['infos'], newsCreate:['infos'], newsHide:['infos'], newsDelete:['infos'],
 };
 const cacheKey = (action, payload) => action + '|' + JSON.stringify(payload || {});
 const cacheStoreKey = () => 'krhub_cache_' + (S.user ? S.user.name : '');
@@ -588,6 +622,7 @@ function renderTabs(){
 }
 function go(tab){
   if (!tabList().some(t => t[0]===tab)) tab = 'plan';
+  if (S.hc && (tab !== 'info' || S.tab !== 'info')) { hcSave(); S.hc = null; }
   S.tab = tab; renderTabs(); window.scrollTo(0,0);
   return ({plan:viewPlan, team:viewTeam, wish:viewWish, info:viewInfo, kader:viewKader})[tab]();
 }
@@ -605,6 +640,12 @@ function planBanner(){
   const b = $('#newsBanner'); if (!b) return;
   b.innerHTML = S.infoUnread ? `<button class="banner" id="toNews"><span style="font-size:22px">📣</span><span>${S.infoUnread === 1 ? '1 neue Mitteilung' : S.infoUnread + ' neue Mitteilungen'} – bitte lesen und bestätigen</span></button>` : '';
   const t = $('#toNews'); if (t) t.onclick = () => { S.infoCat = 'News'; go('info'); };
+  const hd = (FBX.main && FBX.main.haccp) || (CACHE.get(cacheKey('haccp', {})) || {}).data;
+  const due = hd ? hd.stations.filter(s => s.due && s.g === S.user.group) : [];
+  if (due.length) {
+    b.insertAdjacentHTML('beforeend', `<button class="banner" id="toHc" style="margin-top:${S.infoUnread?'10px':'0'}"><span style="font-size:22px">🌡️</span><span>HACCP-Kontrolle fällig: ${due.map(s => esc(s.st)).join(', ')}</span></button>`);
+    $('#toHc').onclick = () => { S.haccpData = hd; if (due.length === 1) hcStart(due[0].st); else { S.infoCat = 'HACCP & Hygiene'; go('info'); } };
+  }
 }
 const loading = () => { $('#view').innerHTML = '<div class="spinner" aria-label="Lädt"></div>'; };
 
@@ -746,13 +787,13 @@ async function cancelWish(id){
 /* ================================================================ Genehmigen */
 const kb = () => $('#kbody');
 function viewKader(){
-  const subs = [['ok','Genehmigen']].concat(S.user.role === 'Admin' ? [['admin','Sperrtage & PINs']] : []);
+  const subs = [['ok','Genehmigen'],['haccp','HACCP']].concat(S.user.role === 'Admin' ? [['admin','Sperrtage & PINs']] : []);
   if (!subs.some(x => x[0] === S.kaderSub)) S.kaderSub = 'ok';
   $('#view').innerHTML = `<div class="view-head"><h2>Kader</h2></div>
     ${subs.length > 1 ? `<div class="chips">${subs.map(([k,l]) => `<button class="chipbtn" data-sub="${k}" aria-pressed="${S.kaderSub===k}">${l}${k==='ok' && S.openCount ? ` (${S.openCount})` : ''}</button>`).join('')}</div>` : ''}
     <div id="kbody" style="display:grid;gap:16px"></div>`;
   document.querySelectorAll('[data-sub]').forEach(b => b.onclick = () => { S.kaderSub = b.dataset.sub; viewKader(); });
-  (S.kaderSub === 'admin' ? viewAdmin : viewApprove)();
+  ({ admin: viewAdmin, haccp: viewHaccpKader, ok: viewApprove })[S.kaderSub]();
 }
 function viewApprove(){
   if (!kb()) return viewKader();
@@ -868,6 +909,7 @@ function renderInfo(x, d){
   return `<details class="${cls}" ${x.important ? 'open' : ''}><summary>${x.important ? '★ ' : ''}${esc(x.title)}</summary>${infoMeta(x)}<div class="info-text">${fmtText(x.text)}</div>${infoActions(x, d)}</details>`;
 }
 function viewInfo(){
+  if (S.hc) return renderHaccpForm();
   return swr('infos', {}, () => S.tab === 'info', renderInfoView, 'Infos konnten nicht geladen werden.');
 }
 function renderInfoView(d){
@@ -876,6 +918,7 @@ function renderInfoView(d){
     <div class="view-head"><h2>Infos</h2>${d.canPost ? '<button class="btn kr sm" id="newsNew">+ Mitteilung</button>' : ''}</div>
     <input class="search" id="infoQ" type="search" placeholder="Suchen, z. B. Notfall, Hygiene" value="${esc(S.infoQ)}" aria-label="Infos durchsuchen">
     <div class="chips" id="infoChips"></div>
+    <div id="hcBox" style="display:grid;gap:12px"></div>
     <div id="infoList" style="display:grid;gap:12px"></div>`;
   $('#infoQ').oninput = e => { S.infoQ = e.target.value; renderInfoList(); };
   if (d.canPost) $('#newsNew').onclick = newsDialog;
@@ -886,6 +929,7 @@ function renderInfoList(){
   const unreadBy = c => d.items.filter(x => x.cat === c && x.confirm && !x.read).length;
   $('#infoChips').innerHTML = q ? '' : d.cats.map(c => `<button class="chipbtn" data-cat="${esc(c)}" aria-pressed="${S.infoCat===c}">${esc(CAT_LABEL[c]||c)}${unreadBy(c) ? ` · ${unreadBy(c)} neu` : ''}</button>`).join('');
   document.querySelectorAll('[data-cat]').forEach(b => b.onclick = () => { S.infoCat = b.dataset.cat; renderInfoList(); });
+  const hb = $('#hcBox'); if (hb) { if (!q && S.infoCat === 'HACCP & Hygiene') loadHaccpBox(); else hb.innerHTML = ''; }
   let items = q ? d.items.filter(x => (x.title + ' ' + x.text + ' ' + x.cat).toLowerCase().includes(q)) : d.items.filter(x => x.cat === S.infoCat);
   const archived = (!q && S.infoCat === 'News') ? items.filter(x => x.read && x.by !== S.user.name) : [];
   if (archived.length) items = items.filter(x => !archived.includes(x));
@@ -910,7 +954,15 @@ function renderInfoList(){
   });
   document.querySelectorAll('[data-del-news]').forEach(b => b.onclick = () => openSheet(`<h3>Mitteilung löschen?</h3><p style="margin:0">Sie wird für alle endgültig gelöscht, zusammen mit den Lesebestätigungen. Das lässt sich nicht rückgängig machen.</p>
     <div class="row"><button class="btn ghost grow" data-close>Abbrechen</button><button class="btn danger grow" id="delGo">Löschen</button></div>`,
-    () => { $('#delGo').onclick = async () => { $('#delGo').disabled = true; try { await call('newsDelete', { id: b.dataset.delNews }); closeSheet(); toast('Mitteilung gelöscht'); viewInfo(); } catch(e){ $('#delGo').disabled = false; } }; }));
+    () => { $('#delGo').onclick = () => {
+      // sofort ausblenden, Löschen läuft im Hintergrund
+      const id = b.dataset.delNews;
+      const drop = o => { if (o && o.items) o.items = o.items.filter(i => i.id !== id); };
+      drop(S.infoData); if (FBX.main) drop(FBX.main.infos);
+      const k = CACHE.get(cacheKey('infos', {})); if (k) putCache(cacheKey('infos', {}), Object.assign({}, k.data, { items: k.data.items.filter(i => i.id !== id) }));
+      closeSheet(); renderInfoList(); toast('Mitteilung gelöscht');
+      call('newsDelete', { id }).catch(() => { toast('Löschen hat nicht geklappt – bitte nochmals versuchen.', 5000); viewInfo(); });
+    }; }));
 }
 function newsDialog(){
   const groups = S.infoData.postGroups;
@@ -928,6 +980,206 @@ function newsDialog(){
         closeSheet(); toast('Mitteilung veröffentlicht'); S.infoCat = 'News'; S.infoQ = ''; viewInfo(); }
       catch(e){ $('#nSend').disabled = false; }
     }; });
+}
+
+/* ================================================================ HACCP */
+const HC_TEILE = ['Temperaturen','Erhitzen','Abkühlen','Auftauen','Datierung & Deklaration','Reinigung','Ölqualität','Wareneingang'];
+const hcNum = x => { if (x == null || String(x).trim() === '') return null; const s = String(x).trim().replace('−','-').replace(',', '.').replace(/(\d)\s+(\d)/, '$1.$2').replace(/\s+/g, ''); return /^-?\d+(\.\d+)?$/.test(s) ? Number(s) : NaN; };
+const hcF = n => (Math.round(n*10)/10).toLocaleString('de-CH');
+const hcDraftKey = st => 'krhub_hc_' + (S.user ? S.user.uid || S.user.name : '') + '_' + st;
+function hcSoll(c){
+  if (c.art === 'Temperatur') return (c.min != null ? '≥ ' + hcF(c.min) + ' ' : '') + (c.max != null ? '≤ ' + hcF(c.max) : '') + ' °C';
+  if (c.art === 'Erhitzen') return 'Kern ≥ ' + hcF(c.min ?? 72) + ' °C';
+  if (c.art === 'Abkühlen') return '≤ ' + hcF(c.max ?? 5) + ' °C in ≤ ' + (Number(c.opt) || 90) + ' Min.';
+  return '';
+}
+/* Bewertung nur zur Anzeige – der Server prüft nochmals. → 'ok' | 'bad' | 'miss' | 'err' */
+function hcState(c, x){
+  x = x || {};
+  const temp = (lo, hi) => { const n = hcNum(x.v); if (n === null) return 'miss'; if (isNaN(n) || n < -45 || n > 130) return 'err'; return ((hi != null && n > hi) || (lo != null && n < lo)) ? 'bad' : 'ok'; };
+  switch (c.art) {
+    case 'Temperatur': return x.off ? 'ok' : temp(c.min, c.max);
+    case 'Erhitzen': return x.skip ? 'ok' : temp(c.min ?? 72, null);
+    case 'Abkühlen': { if (x.skip) return 'ok'; const t = temp(null, c.max ?? 5); if (t === 'miss' || t === 'err') return t; if (x.inTime == null) return 'miss'; return (t === 'bad' || x.inTime === false) ? 'bad' : 'ok'; }
+    case 'Prüfung': return x.ok === true || x.ok === 'na' ? 'ok' : x.ok === false ? 'bad' : 'miss';
+    case 'Reinigung': return x.done ? 'ok' : 'bad';
+    case 'Öl': return !x.state ? 'miss' : x.state === 'hoch' ? 'bad' : 'ok';
+    case 'Wareneingang': {
+      if (x.none) return 'ok';
+      if (!x.lief || !x.prod || !x.kat || x.menge == null || x.verp == null) return 'miss';
+      let t = 'ok'; if (x.kat !== 'raum') { t = temp(null, x.kat === 'tk' ? -18 : 5); if (t === 'miss' || t === 'err') return t; }
+      return (t === 'bad' || !x.menge || !x.verp) ? 'bad' : 'ok';
+    }
+  }
+  return 'ok';
+}
+function hcStation(st){ const d = S.haccpData; return d && d.stations.find(s => s.st === st); }
+function hcStart(st){
+  let saved = null; try { saved = JSON.parse(localStorage.getItem(hcDraftKey(st)) || 'null'); } catch(e) {}
+  S.hc = saved && saved.day === todayIso() ? saved : { st, day: todayIso(), step: 0, values: {}, cleanNote: '', comment: '' };
+  S.hc.st = st; S.tab = 'info'; renderTabs(); renderHaccpForm(); window.scrollTo(0,0);
+}
+function hcSave(){ if (!S.hc) return; try { localStorage.setItem(hcDraftKey(S.hc.st), JSON.stringify(S.hc)); } catch(e) {} }
+function hcClose(){ S.hc = null; viewInfo(); }
+function hcSteps(){ const s = hcStation(S.hc.st); return s ? HC_TEILE.filter(t => s.items.some(i => i.teil === t)).concat(['Abschluss']) : ['Abschluss']; }
+const hcVal = id => (S.hc.values[id] = S.hc.values[id] || {});
+
+function hcItemHtml(c){
+  const x = S.hc.values[c.id] || {}, st = hcState(c, x), cls = st === 'bad' ? 'bad' : '';
+  const num = (dis, ph='°C') => `<input class="tin" data-hcv="${c.id}" inputmode="decimal" autocomplete="off" placeholder="${ph}" value="${esc(x.v ?? '')}" ${dis?'disabled':''} aria-label="${esc(c.p)} Temperatur">`;
+  const tog = (f, l) => `<button class="tog" data-hct="${c.id}" data-f="${f}" aria-pressed="${!!x[f]}">${l}</button>`;
+  const seg = (f, opts) => `<span class="seg">${opts.map(([v, l, k]) => `<button class="${k||''}" data-hcs="${c.id}" data-f="${f}" data-v='${JSON.stringify(v)}' aria-pressed="${x[f] === v}">${l}</button>`).join('')}</span>`;
+  const note = `<input class="in note full" data-hcn="${c.id}" maxlength="300" placeholder="${c.art === 'Temperatur' ? 'Massnahme, z. B. Ware umgelagert, Techniker gerufen' : 'Massnahme / was wurde gemacht?'}" value="${esc(x.note || '')}">`;
+  const name = `<div class="nm">${esc(c.p)}${hcSoll(c) ? `<small>Soll ${esc(hcSoll(c))}</small>` : ''}</div>`;
+  let ctl = '';
+  if (c.art === 'Temperatur') ctl = num(x.off) + tog('off', 'Aus');
+  else if (c.art === 'Erhitzen') ctl = num(x.skip) + tog('skip', 'Nicht gekocht');
+  else if (c.art === 'Abkühlen') ctl = num(x.skip) + tog('skip', 'Nicht gekocht') + (x.skip ? '' : `<span class="full" style="display:flex;gap:8px;justify-content:flex-end;align-items:center"><span class="small muted">in ${Number(c.opt)||90} Min.?</span>${seg('inTime', [[true,'Ja','okb'],[false,'Nein','badb']])}</span>`);
+  else if (c.art === 'Prüfung') ctl = seg('ok', [[true,'OK','okb'],[false,'Fehler','badb'],['na','Entfällt']]);
+  else if (c.art === 'Öl') {
+    const fr = c.opt.split(',').map(s => s.trim()).filter(Boolean);
+    return `<div class="hc-item ${cls}" data-item="${c.id}"><div class="nm full">Ölqualität geprüft (Testo)</div>
+      <div class="full">${seg('state', [['ok','In Ordnung','okb'],['gewechselt','Öl gewechselt'],['hoch','Zu hoch','badb']])}</div>
+      ${x.state && x.state !== 'ok' && fr.length ? `<div class="full row">${fr.map(f => `<button class="chipbtn" data-hcs="${c.id}" data-f="fr" data-v='${JSON.stringify(f)}' aria-pressed="${x.fr===f}">${esc(f)}</button>`).join('')}</div>` : ''}
+      <label class="full row small muted">Messwert (optional) ${num(false, '% TPM')}</label>${note}</div>`;
+  }
+  else if (c.art === 'Wareneingang') {
+    const lf = c.opt.split(',').map(s => s.trim()).filter(Boolean);
+    if (x.none) return `<div class="hc-item" data-item="${c.id}"><div class="nm">Wareneingang</div><div class="ctl">${tog('none','Keine Lieferung')}</div></div>`;
+    return `<div class="hc-item ${cls}" data-item="${c.id}"><div class="nm">Eine Lieferung dieser Woche prüfen</div><div class="ctl">${tog('none','Keine Lieferung')}</div>
+      <label class="f full">Lieferant<select class="in" data-hcsel="${c.id}" data-f="lief"><option value="">– wählen –</option>${lf.concat(['Andere']).map(l => `<option ${x.lief===l?'selected':''}>${esc(l)}</option>`).join('')}</select></label>
+      <label class="f full">Produkt<input class="in" data-hctx="${c.id}" data-f="prod" maxlength="120" value="${esc(x.prod||'')}" placeholder="z. B. Sprossen, Pouletbrust"></label>
+      <div class="full">${seg('kat', [['kuehl','Kühlware ≤ 5 °C'],['tk','TK ≤ −18 °C'],['raum','Ungekühlt']])}</div>
+      ${x.kat && x.kat !== 'raum' ? `<label class="full row" style="justify-content:space-between">Gemessene Temperatur ${num(false)}</label>` : ''}
+      <div class="full row" style="justify-content:space-between"><span>Menge korrekt?</span>${seg('menge', [[true,'Ja','okb'],[false,'Nein','badb']])}</div>
+      <div class="full row" style="justify-content:space-between"><span>Verpackung / Gebinde in Ordnung?</span>${seg('verp', [[true,'Ja','okb'],[false,'Nein','badb']])}</div>
+      ${note}</div>`;
+  }
+  return `<div class="hc-item ${cls}" data-item="${c.id}">${name}<div class="ctl">${ctl}</div><div class="full hc-err" data-errfor="${c.id}" ${st === 'err' ? '' : 'hidden'}>Bitte nur eine Zahl eingeben, z. B. 4,5 oder -18</div>${note}</div>`;
+}
+
+function renderHaccpForm(){
+  const s = hcStation(S.hc.st);
+  if (!s) { S.hc = null; return viewInfo(); }
+  const steps = hcSteps(); S.hc.step = Math.min(S.hc.step, steps.length - 1);
+  const teil = steps[S.hc.step], items = s.items.filter(i => i.teil === teil);
+  const pct = Math.round(S.hc.step / (steps.length - 1) * 100);
+  let body = '';
+  if (teil === 'Abschluss') {
+    const all = s.items.map(c => ({ c, st: hcState(c, S.hc.values[c.id]) }));
+    const miss = all.filter(a => a.st === 'miss' || a.st === 'err');
+    const bad = all.filter(a => a.st === 'bad');
+    body = `<div class="card"><div class="hc-sum"><div><span class="label">Punkte</span><b style="display:block;font-size:22px">${all.length}</b></div><div><span class="label">Abweichungen</span><b style="display:block;font-size:22px;color:${bad.length?'var(--red)':'inherit'}">${bad.length}</b></div><div><span class="label">Offen</span><b style="display:block;font-size:22px">${miss.length}</b></div></div>
+      ${miss.length ? `<div class="hc-err">Noch nicht ausgefüllt: ${miss.slice(0,6).map(a => esc(a.c.p)).join(', ')}${miss.length>6?' …':''}</div>` : ''}
+      ${bad.length ? `<div class="label">Abweichungen</div>${bad.map(a => `<div class="small">⚠ <b>${esc(a.c.p)}</b> · ${esc(a.c.teil)}${(S.hc.values[a.c.id]||{}).note ? ' – ' + esc(S.hc.values[a.c.id].note) : a.c.art === 'Reinigung' && S.hc.cleanNote ? ' – ' + esc(S.hc.cleanNote) : ' – <span class="hc-err">Massnahme fehlt</span>'}</div>`).join('')}` : '<div class="ok">✓ Keine Abweichungen</div>'}
+      <label class="f">Bemerkung (optional)<textarea class="in" id="hcComment" maxlength="500">${esc(S.hc.comment||'')}</textarea></label>
+      <p class="small muted" style="margin:0">Kontrolliert von <b>${esc(S.user.name)}</b> am ${dmy(todayIso())}. Mit «Abschliessen» bestätigst du, dass alle Werte selbst gemessen wurden.</p></div>`;
+  } else if (teil === 'Reinigung') {
+    const open = items.filter(c => !(S.hc.values[c.id]||{}).done).length;
+    body = `<div class="card"><div class="row" style="justify-content:space-between"><span class="small muted">Was wurde diese Woche gründlich gereinigt?</span><button class="btn ghost sm" data-hcall="done">Alle erledigt</button></div>
+      <div>${items.map(c => `<label class="hc-clean"><input type="checkbox" data-hcc="${c.id}" ${(S.hc.values[c.id]||{}).done?'checked':''}><span>${esc(c.p)}</span></label>`).join('')}</div>
+      ${open ? `<label class="f">Warum ist ${open === 1 ? '1 Punkt' : open + ' Punkte'} nicht erledigt? Was passiert?<input class="in" id="hcClean" maxlength="300" value="${esc(S.hc.cleanNote||'')}" placeholder="z. B. Lüftung wird Montag gereinigt"></label>` : ''}</div>`;
+  } else {
+    const allOk = items.every(c => c.art === 'Prüfung');
+    body = `<div class="card">${allOk ? `<div class="row" style="justify-content:flex-end"><button class="btn ghost sm" data-hcall="ok">Alle OK</button></div>` : ''}${items.map(hcItemHtml).join('')}</div>`;
+  }
+  $('#view').innerHTML = `
+    <div class="view-head"><h2>HACCP</h2><button class="btn ghost sm" id="hcX">Später</button></div>
+    <div class="card" style="gap:8px"><div class="row" style="justify-content:space-between"><b>${esc(s.st)}</b><span class="small muted">Schritt ${S.hc.step+1} von ${steps.length}</span></div><div class="hc-prog"><i style="width:${pct}%"></i></div>
+      <div class="label" style="margin-top:4px">${esc(teil)}</div></div>
+    ${body}
+    <div id="hcMsg" class="hc-err" role="alert"></div>
+    <div class="row">${S.hc.step > 0 ? '<button class="btn ghost grow" id="hcBack">Zurück</button>' : ''}${teil === 'Abschluss' ? '<button class="btn kr grow" id="hcSend">Abschliessen</button>' : '<button class="btn kr grow" id="hcNext">Weiter</button>'}</div>`;
+  hcBind(s, items, teil, steps);
+}
+
+function hcBind(s, items, teil, steps){
+  const V = $('#view'), find = id => s.items.find(i => i.id === id);
+  // Beim Tippen nur die Zeile aktualisieren (kein Neuzeichnen → Fokus bleibt)
+  const refreshRow = id => { const c = find(id), row = V.querySelector(`[data-item="${id}"]`); if (!row) return; const st = hcState(c, S.hc.values[id]);
+    row.classList.toggle('bad', st === 'bad'); const e = row.querySelector('[data-errfor]'); if (e) e.hidden = st !== 'err'; };
+  V.querySelectorAll('[data-hcv]').forEach(i => { i.oninput = () => { hcVal(i.dataset.hcv).v = i.value; hcSave(); refreshRow(i.dataset.hcv); }; });
+  V.querySelectorAll('[data-hcn]').forEach(i => i.oninput = () => { hcVal(i.dataset.hcn).note = i.value; hcSave(); });
+  V.querySelectorAll('[data-hctx]').forEach(i => i.oninput = () => { hcVal(i.dataset.hctx)[i.dataset.f] = i.value; hcSave(); });
+  V.querySelectorAll('[data-hcsel]').forEach(i => i.onchange = () => { hcVal(i.dataset.hcsel)[i.dataset.f] = i.value; hcSave(); });
+  V.querySelectorAll('[data-hct]').forEach(b => b.onclick = () => { const x = hcVal(b.dataset.hct); x[b.dataset.f] = !x[b.dataset.f]; hcSave(); renderHaccpForm(); });
+  V.querySelectorAll('[data-hcs]').forEach(b => b.onclick = () => { const x = hcVal(b.dataset.hcs), v = JSON.parse(b.dataset.v); x[b.dataset.f] = x[b.dataset.f] === v ? undefined : v; hcSave(); renderHaccpForm(); });
+  V.querySelectorAll('[data-hcc]').forEach(i => i.onchange = () => { hcVal(i.dataset.hcc).done = i.checked; hcSave(); renderHaccpForm(); });
+  V.querySelectorAll('[data-hcall]').forEach(b => b.onclick = () => { items.forEach(c => { if (b.dataset.hcall === 'done') hcVal(c.id).done = true; else if (c.art === 'Prüfung') hcVal(c.id).ok = true; }); hcSave(); renderHaccpForm(); });
+  const cl = $('#hcClean'); if (cl) cl.oninput = () => { S.hc.cleanNote = cl.value; hcSave(); };
+  const cm = $('#hcComment'); if (cm) cm.oninput = () => { S.hc.comment = cm.value; hcSave(); };
+  $('#hcX').onclick = () => { hcSave(); hcClose(); toast('Entwurf gespeichert – du kannst später weitermachen.'); };
+  const back = $('#hcBack'); if (back) back.onclick = () => { S.hc.step--; hcSave(); renderHaccpForm(); window.scrollTo(0,0); };
+  const next = $('#hcNext');
+  if (next) next.onclick = () => {
+    const probs = [];
+    items.forEach(c => { const x = S.hc.values[c.id] || {}, st = hcState(c, x);
+      if (st === 'miss') probs.push(c.p + ': fehlt'); else if (st === 'err') probs.push(c.p + ': keine gültige Zahl');
+      else if (st === 'bad' && c.art !== 'Reinigung' && !String(x.note||'').trim()) probs.push(c.p + ': Massnahme fehlt'); });
+    if (teil === 'Reinigung' && items.some(c => !(S.hc.values[c.id]||{}).done) && !String(S.hc.cleanNote||'').trim()) probs.push('Reinigung: bitte kurz begründen');
+    if (probs.length) { $('#hcMsg').textContent = probs.slice(0,4).join(' · ') + (probs.length > 4 ? ' …' : ''); return; }
+    S.hc.step++; hcSave(); renderHaccpForm(); window.scrollTo(0,0);
+  };
+  const send = $('#hcSend');
+  if (send) send.onclick = async () => {
+    send.disabled = true;
+    try {
+      const r = await call('haccpSubmit', { station: S.hc.st, values: S.hc.values, cleanNote: S.hc.cleanNote, comment: S.hc.comment });
+      try { localStorage.removeItem(hcDraftKey(S.hc.st)); } catch(e) {}
+      toast(r.dev ? `Kontrolle gespeichert · ${r.dev} Abweichung${r.dev>1?'en':''} gemeldet` : 'Kontrolle gespeichert ✓', 5000);
+      S.infoCat = 'HACCP & Hygiene'; hcClose();
+    } catch(e) { send.disabled = false; $('#hcMsg').textContent = e.message; }
+  };
+}
+
+/* Infos › HACCP: Karten pro Station */
+async function loadHaccpBox(){
+  const box = $('#hcBox'); if (!box) return;
+  const draw = d => {
+    S.haccpData = d; const b = $('#hcBox'); if (!b) return;
+    b.innerHTML = d.stations.length ? `<div class="label">Wöchentliche HACCP-Kontrolle</div>` + d.stations.map(s => {
+      let draft = false; try { const x = JSON.parse(localStorage.getItem(hcDraftKey(s.st)) || 'null'); draft = !!(x && x.day === todayIso()); } catch(e) {}
+      return `<div class="card hc-st"><b>${esc(s.st)}</b><button class="btn ${s.due ? 'kr' : 'ghost'} sm" data-hcgo="${esc(s.st)}">${draft ? 'Weiter ausfüllen' : 'Kontrolle starten'}</button>
+        <div class="meta">${s.last ? `Letzte: ${DAYS[wdIdx(s.last.date)]} ${dmy(s.last.date)} · ${esc(s.last.by)}${s.last.dev ? ` · <span class="hc-due">${s.last.dev} Abweichung${s.last.dev>1?'en':''}</span>` : ' · ✓'}` : 'Noch keine Kontrolle in der App'}
+        ${s.due ? ` · <span class="hc-due">fällig</span>` : ` · nächste in ${d.intervall - s.days} Tag${d.intervall - s.days === 1 ? '' : 'en'}`}</div></div>`;
+    }).join('') : '';
+    b.querySelectorAll('[data-hcgo]').forEach(x => x.onclick = () => hcStart(x.dataset.hcgo));
+  };
+  const k = CACHE.get(cacheKey('haccp', {})); if (k) draw(JSON.parse(k.json));
+  try { const d = await getData('haccp'); putCache(cacheKey('haccp', {}), d); draw(d); } catch(e) {}
+}
+
+/* Kader › HACCP */
+function viewHaccpKader(){
+  if (!kb()) return viewKader();
+  return swr('haccpKader', {}, () => S.tab === 'kader' && S.kaderSub === 'haccp' && !!kb(), renderHaccpKader, 'Konnte nicht geladen werden.', kb);
+}
+function renderHaccpKader(d){
+  if (!kb()) return;
+  kb().innerHTML = `
+    <div class="label">Stand pro Station</div>
+    <div class="card list">${d.status.map(s => `<div class="li"><div><b>${esc(s.st)}</b></div>${s.due ? '<span class="chip c-Abgelehnt">fällig</span>' : '<span class="chip c-Genehmigt">✓</span>'}
+      <div class="sub">${s.last ? `Letzte: ${dmy(s.last.date)} · ${esc(s.last.by)} · vor ${s.days} Tag${s.days===1?'':'en'}${s.last.dev ? ` · ${s.last.dev} Abweichung${s.last.dev>1?'en':''}` : ''}` : 'Noch keine Kontrolle'}</div></div>`).join('')}</div>
+    <div class="label">Offene Abweichungen (${d.open.length})</div>
+    ${d.open.length ? d.open.map(a => `<div class="card hc-dev">
+      <div class="row" style="justify-content:space-between"><b>${esc(a.p)}</b><span class="small muted">${esc(a.st)} · ${dmy(a.date)}</span></div>
+      <div class="small">${esc(a.teil)}: <b>${esc(a.v)}</b>${a.soll ? ` <span class="muted">(Soll ${esc(a.soll)})</span>` : ''}</div>
+      <div class="small">Massnahme: ${esc(a.note)} <span class="muted">– ${esc(a.by)}</span></div>
+      <button class="btn ghost sm" style="justify-self:start" data-ack="${esc(a.id)}">Massnahme geprüft – quittieren</button></div>`).join('') : '<div class="card"><p class="empty" style="margin:0">Keine offenen Abweichungen. 👍</p></div>'}
+    <div class="label">Letzte Kontrollen</div>
+    ${d.recent.length ? `<div class="card list">${d.recent.map(k => `<button class="li" style="background:none;border-left:0;border-right:0;border-bottom:0;text-align:left;cursor:pointer;width:100%" data-hck="${esc(k.id)}"><div><b>${esc(k.st)}</b> <span class="muted small">${dmy(k.date)} · ${esc(k.by)}</span></div>${k.dev ? `<span class="chip c-Abgelehnt">${k.dev} ⚠</span>` : '<span class="chip c-Genehmigt">OK</span>'}</button>`).join('')}</div>` : '<p class="empty">Noch keine Kontrollen.</p>'}`;
+  kb().querySelectorAll('[data-ack]').forEach(b => b.onclick = async () => {
+    b.disabled = true;
+    try { await call('haccpAck', { id: b.dataset.ack }); toast('Quittiert'); viewHaccpKader(); } catch(e) { b.disabled = false; }
+  });
+  kb().querySelectorAll('[data-hck]').forEach(b => b.onclick = async () => {
+    try { const r = await call('haccpDetail', { id: b.dataset.hck });
+      const byT = {}; r.values.forEach(v => (byT[v.teil] = byT[v.teil] || []).push(v));
+      openSheet(`<h3>${esc(r.check.st)} · ${dmy(r.check.date)}</h3><p class="small muted" style="margin:0">Kontrolliert von ${esc(r.check.by)}${r.check.note ? ' · ' + esc(r.check.note) : ''}</p>
+        ${Object.entries(byT).map(([t, vs]) => `<div class="label">${esc(t)}</div><div class="card list">${vs.map(v => `<div class="li"><div class="small"><b>${esc(v.p)}</b></div><span class="small" style="${v.status==='Abweichung'?'color:var(--red);font-weight:700':''}">${esc(v.v)}</span>${v.note ? `<div class="sub">${esc(v.note)}</div>` : ''}</div>`).join('')}</div>`).join('')}
+        <button class="btn ghost" data-close>Schliessen</button>`);
+    } catch(e) {}
+  });
 }
 
 /* ================================================================ Profil */
@@ -1019,6 +1271,7 @@ function demoPublic(u){
   const approves = u.role === 'Admin' ? GROUPS.concat(['Springer']) : u.role === 'Filialleitung' ? u.filialen : [];
   return { name:u.name, role:u.role, stamm:u.stamm, bereich:u.bereich||'', group:u.group, groups, approves };
 }
+const DEMO_HC = [{"id": "D0", "st": "Shoppyland", "g": "Shoppyland", "teil": "Temperaturen", "p": "Gemüse Frigor", "art": "Temperatur", "min": null, "max": 5, "opt": ""}, {"id": "D1", "st": "Shoppyland", "g": "Shoppyland", "teil": "Temperaturen", "p": "Saladette Gross", "art": "Temperatur", "min": null, "max": 5, "opt": ""}, {"id": "D2", "st": "Shoppyland", "g": "Shoppyland", "teil": "Temperaturen", "p": "Saladette Klein", "art": "Temperatur", "min": null, "max": 5, "opt": ""}, {"id": "D3", "st": "Shoppyland", "g": "Shoppyland", "teil": "Temperaturen", "p": "Frigor 1", "art": "Temperatur", "min": null, "max": 5, "opt": ""}, {"id": "D4", "st": "Shoppyland", "g": "Shoppyland", "teil": "Temperaturen", "p": "Frigor 2", "art": "Temperatur", "min": null, "max": 5, "opt": ""}, {"id": "D5", "st": "Shoppyland", "g": "Shoppyland", "teil": "Temperaturen", "p": "Frigor 3", "art": "Temperatur", "min": null, "max": 5, "opt": ""}, {"id": "D6", "st": "Shoppyland", "g": "Shoppyland", "teil": "Temperaturen", "p": "Frigor 4", "art": "Temperatur", "min": null, "max": 5, "opt": ""}, {"id": "D7", "st": "Shoppyland", "g": "Shoppyland", "teil": "Temperaturen", "p": "Frigor 6", "art": "Temperatur", "min": null, "max": 5, "opt": ""}, {"id": "D8", "st": "Shoppyland", "g": "Shoppyland", "teil": "Temperaturen", "p": "Getränkekühlschrank Coca Cola", "art": "Temperatur", "min": null, "max": 5, "opt": ""}, {"id": "D9", "st": "Shoppyland", "g": "Shoppyland", "teil": "Temperaturen", "p": "Bubbletea Kühlschrank", "art": "Temperatur", "min": null, "max": 5, "opt": ""}, {"id": "D10", "st": "Shoppyland", "g": "Shoppyland", "teil": "Temperaturen", "p": "Tiefkühler Küche", "art": "Temperatur", "min": null, "max": -18, "opt": ""}, {"id": "D11", "st": "Shoppyland", "g": "Shoppyland", "teil": "Temperaturen", "p": "Kühlschrank Untergeschoss", "art": "Temperatur", "min": null, "max": 5, "opt": ""}, {"id": "D12", "st": "Shoppyland", "g": "Shoppyland", "teil": "Temperaturen", "p": "Tiefkühler Untergeschoss", "art": "Temperatur", "min": null, "max": -18, "opt": ""}, {"id": "D13", "st": "Shoppyland", "g": "Shoppyland", "teil": "Erhitzen", "p": "Poulet", "art": "Erhitzen", "min": 72, "max": null, "opt": ""}, {"id": "D14", "st": "Shoppyland", "g": "Shoppyland", "teil": "Erhitzen", "p": "Ente", "art": "Erhitzen", "min": 72, "max": null, "opt": ""}, {"id": "D15", "st": "Shoppyland", "g": "Shoppyland", "teil": "Erhitzen", "p": "Rindfleisch (Thai Basil Beef)", "art": "Erhitzen", "min": 72, "max": null, "opt": ""}, {"id": "D16", "st": "Shoppyland", "g": "Shoppyland", "teil": "Erhitzen", "p": "Crevetten", "art": "Erhitzen", "min": 72, "max": null, "opt": ""}, {"id": "D17", "st": "Shoppyland", "g": "Shoppyland", "teil": "Erhitzen", "p": "Reis", "art": "Erhitzen", "min": 72, "max": null, "opt": ""}, {"id": "D18", "st": "Shoppyland", "g": "Shoppyland", "teil": "Erhitzen", "p": "Pork Belly", "art": "Erhitzen", "min": 72, "max": null, "opt": ""}, {"id": "D19", "st": "Shoppyland", "g": "Shoppyland", "teil": "Abkühlen", "p": "Reis", "art": "Abkühlen", "min": null, "max": 5, "opt": "90"}, {"id": "D20", "st": "Shoppyland", "g": "Shoppyland", "teil": "Auftauen", "p": "Korrekt aufgetaut (0–5 °C im Frigor oder im Wasserbad)", "art": "Prüfung", "min": null, "max": null, "opt": ""}, {"id": "D21", "st": "Shoppyland", "g": "Shoppyland", "teil": "Datierung & Deklaration", "p": "Fleischprodukte TK", "art": "Prüfung", "min": null, "max": null, "opt": ""}, {"id": "D22", "st": "Shoppyland", "g": "Shoppyland", "teil": "Datierung & Deklaration", "p": "Meeresfrüchte TK", "art": "Prüfung", "min": null, "max": null, "opt": ""}, {"id": "D23", "st": "Shoppyland", "g": "Shoppyland", "teil": "Datierung & Deklaration", "p": "Molkereiprodukte", "art": "Prüfung", "min": null, "max": null, "opt": ""}, {"id": "D24", "st": "Shoppyland", "g": "Shoppyland", "teil": "Datierung & Deklaration", "p": "Gemüse Frisch", "art": "Prüfung", "min": null, "max": null, "opt": ""}, {"id": "D25", "st": "Shoppyland", "g": "Shoppyland", "teil": "Datierung & Deklaration", "p": "Gemüse TK", "art": "Prüfung", "min": null, "max": null, "opt": ""}, {"id": "D26", "st": "Shoppyland", "g": "Shoppyland", "teil": "Datierung & Deklaration", "p": "Convenience Produkte", "art": "Prüfung", "min": null, "max": null, "opt": ""}, {"id": "D27", "st": "Shoppyland", "g": "Shoppyland", "teil": "Datierung & Deklaration", "p": "Bubbletea und PET Getränke", "art": "Prüfung", "min": null, "max": null, "opt": ""}, {"id": "D28", "st": "Shoppyland", "g": "Shoppyland", "teil": "Reinigung", "p": "Abstellflächen und Arbeitstische", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D29", "st": "Shoppyland", "g": "Shoppyland", "teil": "Reinigung", "p": "Arbeitswerkzeuge", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D30", "st": "Shoppyland", "g": "Shoppyland", "teil": "Reinigung", "p": "Blendtec Maschine (Mixer)", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D31", "st": "Shoppyland", "g": "Shoppyland", "teil": "Reinigung", "p": "Böden", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D32", "st": "Shoppyland", "g": "Shoppyland", "teil": "Reinigung", "p": "Geschirrwaschmaschine (Auch schlecht einsehbare Ecken und Kanten!)", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D33", "st": "Shoppyland", "g": "Shoppyland", "teil": "Reinigung", "p": "Holdomat (auch innen gereinigt!)", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D34", "st": "Shoppyland", "g": "Shoppyland", "teil": "Reinigung", "p": "Alto Shaam (auch innen gereinigt!)", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D35", "st": "Shoppyland", "g": "Shoppyland", "teil": "Reinigung", "p": "Kühl- und Tiefkühlschränke (innen, Griffe, Scheiben)", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D36", "st": "Shoppyland", "g": "Shoppyland", "teil": "Reinigung", "p": "Induktionsherd und Wok Stationen", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D37", "st": "Shoppyland", "g": "Shoppyland", "teil": "Reinigung", "p": "Gestelle Lager UG", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D38", "st": "Shoppyland", "g": "Shoppyland", "teil": "Reinigung", "p": "Lüftungen (Kochbereich und über dem Steamer)", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D39", "st": "Shoppyland", "g": "Shoppyland", "teil": "Reinigung", "p": "Steamer (innen, Griffe, Scheibe, Unterbau)", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D40", "st": "Shoppyland", "g": "Shoppyland", "teil": "Reinigung", "p": "Pfannen und Woks", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D41", "st": "Shoppyland", "g": "Shoppyland", "teil": "Reinigung", "p": "Saladette", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D42", "st": "Shoppyland", "g": "Shoppyland", "teil": "Reinigung", "p": "Schneidebretter", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D43", "st": "Shoppyland", "g": "Shoppyland", "teil": "Reinigung", "p": "Spültröge", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D44", "st": "Shoppyland", "g": "Shoppyland", "teil": "Reinigung", "p": "Wände", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D45", "st": "Shoppyland", "g": "Shoppyland", "teil": "Reinigung", "p": "Warmhalte Vitrine", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D46", "st": "Shoppyland", "g": "Shoppyland", "teil": "Reinigung", "p": "Koch Geschirr (wurden die Rückstände von Datumsetiketten entfernt?)", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D47", "st": "Shoppyland", "g": "Shoppyland", "teil": "Reinigung", "p": "Saladetten", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D48", "st": "Shoppyland", "g": "Shoppyland", "teil": "Wareneingang", "p": "Wareneingang", "art": "Wareneingang", "min": null, "max": null, "opt": "Mundo Ag, Locher Food (Dosen Bubbletea), Saviva Foodservices, Bubble Brothers, The Flavour Kitchen, George Weiss"}, {"id": "D49", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Temperaturen", "p": "Getränkemulde", "art": "Temperatur", "min": null, "max": 5, "opt": ""}, {"id": "D50", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Temperaturen", "p": "KS 1", "art": "Temperatur", "min": null, "max": 5, "opt": ""}, {"id": "D51", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Temperaturen", "p": "KS 2", "art": "Temperatur", "min": null, "max": 5, "opt": ""}, {"id": "D52", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Temperaturen", "p": "KS 3", "art": "Temperatur", "min": null, "max": 5, "opt": ""}, {"id": "D53", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Temperaturen", "p": "KS 4", "art": "Temperatur", "min": null, "max": 5, "opt": ""}, {"id": "D54", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Temperaturen", "p": "Getränkefrigor", "art": "Temperatur", "min": null, "max": 5, "opt": ""}, {"id": "D55", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Temperaturen", "p": "KS 5", "art": "Temperatur", "min": null, "max": 5, "opt": ""}, {"id": "D56", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Temperaturen", "p": "Saladette klein", "art": "Temperatur", "min": null, "max": 5, "opt": ""}, {"id": "D57", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Temperaturen", "p": "Saladette gross", "art": "Temperatur", "min": null, "max": 5, "opt": ""}, {"id": "D58", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Erhitzen", "p": "Poulet", "art": "Erhitzen", "min": 72, "max": null, "opt": ""}, {"id": "D59", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Erhitzen", "p": "Ente", "art": "Erhitzen", "min": 72, "max": null, "opt": ""}, {"id": "D60", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Erhitzen", "p": "Thai Basil Beef", "art": "Erhitzen", "min": 72, "max": null, "opt": ""}, {"id": "D61", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Erhitzen", "p": "Crevetten", "art": "Erhitzen", "min": 72, "max": null, "opt": ""}, {"id": "D62", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Erhitzen", "p": "Reis", "art": "Erhitzen", "min": 72, "max": null, "opt": ""}, {"id": "D63", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Erhitzen", "p": "Pork Belly", "art": "Erhitzen", "min": 72, "max": null, "opt": ""}, {"id": "D64", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Abkühlen", "p": "Poulet", "art": "Abkühlen", "min": null, "max": 5, "opt": "90"}, {"id": "D65", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Abkühlen", "p": "Ente", "art": "Abkühlen", "min": null, "max": 5, "opt": "90"}, {"id": "D66", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Abkühlen", "p": "Crevetten", "art": "Abkühlen", "min": null, "max": 5, "opt": "90"}, {"id": "D67", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Abkühlen", "p": "Reis", "art": "Abkühlen", "min": null, "max": 5, "opt": "90"}, {"id": "D68", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Auftauen", "p": "Korrekt aufgetaut (0–5 °C im Frigor oder im Wasserbad)", "art": "Prüfung", "min": null, "max": null, "opt": ""}, {"id": "D69", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Datierung & Deklaration", "p": "Fleischprodukte TK", "art": "Prüfung", "min": null, "max": null, "opt": ""}, {"id": "D70", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Datierung & Deklaration", "p": "Meeresfrüchte TK", "art": "Prüfung", "min": null, "max": null, "opt": ""}, {"id": "D71", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Datierung & Deklaration", "p": "Molkereiprodukte", "art": "Prüfung", "min": null, "max": null, "opt": ""}, {"id": "D72", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Datierung & Deklaration", "p": "Gemüse Frisch", "art": "Prüfung", "min": null, "max": null, "opt": ""}, {"id": "D73", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Datierung & Deklaration", "p": "Gemüse TK", "art": "Prüfung", "min": null, "max": null, "opt": ""}, {"id": "D74", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Datierung & Deklaration", "p": "Convenience Produkte", "art": "Prüfung", "min": null, "max": null, "opt": ""}, {"id": "D75", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Datierung & Deklaration", "p": "Bubbletea und PET Getränke", "art": "Prüfung", "min": null, "max": null, "opt": ""}, {"id": "D76", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Reinigung", "p": "Abstellflächen und Arbeitstische", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D77", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Reinigung", "p": "Arbeitswerkzeuge", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D78", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Reinigung", "p": "Blendtec Maschine (Mixer)", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D79", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Reinigung", "p": "Böden", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D80", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Reinigung", "p": "Gläserwaschmaschine", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D81", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Reinigung", "p": "Geschirrwaschmaschine (Auch schlecht einsehbare Ecken und Kanten!)", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D82", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Reinigung", "p": "Holdomat (auch innen gereinigt!)", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D83", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Reinigung", "p": "Alto Shaam (auch innen gereinigt!)", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D84", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Reinigung", "p": "Kühl- und Tiefkühlschränke (innen, Griffe, Scheiben)", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D85", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Reinigung", "p": "Induktionsherd und Wok Stationen", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D86", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Reinigung", "p": "Gestelle Lager UG", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D87", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Reinigung", "p": "Lüftungen (Kochbereich und über dem Steamer)", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D88", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Reinigung", "p": "Steamer (innen, Griffe, Scheibe, Unterbau)", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D89", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Reinigung", "p": "Pfannen und Woks", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D90", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Reinigung", "p": "Schneidebretter", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D91", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Reinigung", "p": "Spültröge", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D92", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Reinigung", "p": "Wände", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D93", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Reinigung", "p": "Warmhalte Vitrine", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D94", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Reinigung", "p": "Koch Geschirr (wurden die Rückstände von Datumsetiketten entfernt?)", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D95", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Reinigung", "p": "Bain Marie's", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D96", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Reinigung", "p": "Geschirrwaschmaschinen (Auch schlecht einsehbare Ecken und Kanten!)", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D97", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Reinigung", "p": "Gestelle Lager", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D98", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Reinigung", "p": "Lüftungen", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D99", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Reinigung", "p": "Reiskocher", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D100", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Wareneingang", "p": "Wareneingang", "art": "Wareneingang", "min": null, "max": null, "opt": "Mundo Ag, Saviva Foodservices, George Weiss, The Flavour Kitchen"}];
 async function demoApi(req){
   await new Promise(r => setTimeout(r, 180));
   if (!DB) demoInit();
@@ -1104,6 +1357,25 @@ async function demoApi(req){
         const items = DB.infos.filter(vis).map(x => Object.assign({}, x, { read: x.reads.includes(u.name), readCount: kad ? x.reads.length : undefined, reads: undefined }))
           .sort((a,b) => (b.important - a.important) || (a.cat === 'News' && b.cat === 'News' ? (a.date < b.date ? 1 : -1) : 0));
         return { ok:true, data:{ items, cats:['News','Kontakte & Notfall','HACCP & Hygiene'], canPost:kad, postGroups: u.role === 'Admin' ? ['Alle'].concat(GROUPS) : P.approves } };
+      }
+      case 'haccp': case 'haccpKader': case 'haccpSubmit': case 'haccpAck': case 'haccpDetail': {
+        DB.hc = DB.hc || { cfg: DEMO_HC, checks: [], devs: [] };
+        const sts = [...new Set(DB.hc.cfg.map(c => c.st))].map(st => ({ st, g: DB.hc.cfg.find(c => c.st === st).g }));
+        const vis = sts.filter(x => u.role === 'Admin' || u.group === 'Springer' || x.g === u.group || (u.filialen||[]).includes(x.g));
+        const last = st => DB.hc.checks.filter(k => k.st === st).slice(-1)[0] || null;
+        const days = l => l ? Math.round((parseIso(today) - parseIso(l.date)) / 864e5) : null;
+        if (req.action === 'haccp') return { ok:true, data:{ intervall:7, today, stations: vis.map(x => { const l = last(x.st), d = days(l); return { st:x.st, g:x.g, last:l, days:d, due: d === null || d >= 7, items: DB.hc.cfg.filter(c => c.st === x.st) }; }) } };
+        if (req.action === 'haccpSubmit') {
+          const items = DB.hc.cfg.filter(c => c.st === req.station), id = 'K' + Date.now();
+          const bad = items.filter(c => hcState(c, req.values[c.id]) === 'bad');
+          if (items.some(c => ['miss','err'].includes(hcState(c, req.values[c.id])))) return fail('Bitte alle Punkte ausfüllen.');
+          DB.hc.checks.push({ id, at: new Date().toISOString(), date: today, st: req.station, by: u.name, dev: bad.length, note: req.comment || '', values: items.map(c => ({ teil:c.teil, p:c.p, v: JSON.stringify(req.values[c.id]||{}), soll: hcSoll(c), status: bad.includes(c) ? 'Abweichung' : 'OK', note: (req.values[c.id]||{}).note || '' })) });
+          bad.forEach(c => DB.hc.devs.push({ id: 'A' + Math.random().toString(36).slice(2,8), kid:id, date: today, st: req.station, teil: c.teil, p: c.p, v: (req.values[c.id]||{}).v || 'Fehler', soll: hcSoll(c), note: (req.values[c.id]||{}).note || req.cleanNote, by: u.name, ack:'' }));
+          return { ok:true, data:{ id, dev: bad.length, total: items.length } };
+        }
+        if (req.action === 'haccpAck') { const d = DB.hc.devs.find(x => x.id === req.id); if (d) d.ack = u.name; return { ok:true, data:true }; }
+        if (req.action === 'haccpDetail') { const k = DB.hc.checks.find(x => x.id === req.id); return { ok:true, data:{ check:k, values:k.values } }; }
+        return { ok:true, data:{ status: sts.map(x => { const l = last(x.st), d = days(l); return { st:x.st, last:l, days:d, due: d === null || d >= 7 }; }), open: DB.hc.devs.filter(x => !x.ack), recent: DB.hc.checks.slice().reverse() } };
       }
       case 'infoRead': { const x = DB.infos.find(i => i.id === req.id); if (x && !x.reads.includes(u.name)) x.reads.push(u.name); return { ok:true, data:true }; }
       case 'newsCreate': {
