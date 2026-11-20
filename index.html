@@ -952,6 +952,7 @@ function renderInfoList(){
   const arch = archived.length ? `<button class="btn ghost" id="archToggle">${S.showArchive ? 'Gelesene Mitteilungen ausblenden' : `Gelesene Mitteilungen anzeigen (${archived.length})`}</button>
     ${S.showArchive ? archived.map(x => renderInfo(x, d)).join('') : ''}` : '';
   $('#infoList').innerHTML = (items.length ? items.map(x => (q ? `<div class="label">${esc(CAT_LABEL[x.cat]||x.cat)}</div>` : '') + renderInfo(x, d)).join('')
+    : (!q && S.infoCat === 'HACCP & Hygiene') ? ''
     : `<div class="card"><p class="empty" style="margin:0">${q ? 'Nichts gefunden.' : S.infoCat === 'News' && archived.length ? 'Alles gelesen. 👍' : 'Noch keine Einträge in dieser Kategorie.'}</p></div>`) + arch;
   const at = $('#archToggle'); if (at) at.onclick = () => { S.showArchive = !S.showArchive; renderInfoList(); };
   document.querySelectorAll('[data-read]').forEach(b => b.onclick = async () => {
@@ -1102,7 +1103,7 @@ function renderHaccpForm(){
     body = `<div class="card">${allOk ? `<div class="row" style="justify-content:flex-end"><button class="btn ghost sm" data-hcall="ok">Alle OK</button></div>` : ''}${items.map(hcItemHtml).join('')}</div>`;
   }
   $('#view').innerHTML = `
-    <div class="view-head"><h2>HACCP</h2><button class="btn ghost sm" id="hcX">Später</button></div>
+    <div class="view-head"><h2>HACCP</h2><div class="row"><button class="btn danger sm" id="hcDrop">Abbrechen</button><button class="btn ghost sm" id="hcX">Später</button></div></div>
     <div class="card" style="gap:8px"><div class="row" style="justify-content:space-between"><b>${esc(s.st)}</b><span class="small muted">Schritt ${S.hc.step+1} von ${steps.length}</span></div><div class="hc-prog"><i style="width:${pct}%"></i></div>
       <div class="label" style="margin-top:4px">${esc(teil)}</div></div>
     ${body}
@@ -1127,6 +1128,7 @@ function hcBind(s, items, teil, steps){
   const cl = $('#hcClean'); if (cl) cl.oninput = () => { S.hc.cleanNote = cl.value; hcSave(); };
   const cm = $('#hcComment'); if (cm) cm.oninput = () => { S.hc.comment = cm.value; hcSave(); };
   $('#hcX').onclick = () => { hcSave(); hcClose(); toast('Entwurf gespeichert – du kannst später weitermachen.'); };
+  $('#hcDrop').onclick = () => hcDropDialog(S.hc.st, true);
   const back = $('#hcBack'); if (back) back.onclick = () => { S.hc.step--; hcSave(); renderHaccpForm(); window.scrollTo(0,0); };
   const next = $('#hcNext');
   if (next) next.onclick = () => {
@@ -1193,6 +1195,18 @@ function hcPadClose(){
 }
 document.addEventListener('click', e => { if ($('#hcPad') && !e.target.closest('#hcPad') && !e.target.closest('[data-hcv]')) hcPadClose(); }, true);
 
+/* Kontrolle abbrechen: Entwurf verwerfen */
+function hcDropDialog(st, inForm){
+  hcPadClose();
+  openSheet(`<h3>Kontrolle abbrechen?</h3><p style="margin:0">Alle bisher eingegebenen Werte für <b>${esc(st)}</b> werden gelöscht. Es wird nichts gespeichert.</p>
+    <div class="row"><button class="btn ghost grow" data-close>Weiter ausfüllen</button><button class="btn danger grow" id="hcDropGo">Abbrechen und löschen</button></div>`,
+    () => { $('#hcDropGo').onclick = () => {
+      try { localStorage.removeItem(hcDraftKey(st)); } catch(e) {}
+      closeSheet(); toast('Kontrolle abgebrochen');
+      if (inForm) { S.hc = null; } S.infoCat = 'HACCP & Hygiene'; viewInfo();
+    }; });
+}
+
 /* Infos › HACCP: Karten pro Station */
 async function loadHaccpBox(){
   const box = $('#hcBox'); if (!box) return;
@@ -1200,11 +1214,12 @@ async function loadHaccpBox(){
     S.haccpData = d; const b = $('#hcBox'); if (!b) return;
     b.innerHTML = d.stations.length ? `<div class="label">Wöchentliche HACCP-Kontrolle</div>` + d.stations.map(s => {
       let draft = false; try { const x = JSON.parse(localStorage.getItem(hcDraftKey(s.st)) || 'null'); draft = !!(x && x.day === todayIso()); } catch(e) {}
-      return `<div class="card hc-st"><b>${esc(s.st)}</b><button class="btn ${s.due ? 'kr' : 'ghost'} sm" data-hcgo="${esc(s.st)}">${draft ? 'Weiter ausfüllen' : 'Kontrolle starten'}</button>
+      return `<div class="card hc-st"><b>${esc(s.st)}</b><span class="row" style="justify-content:flex-end">${draft ? `<button class="btn ghost sm" data-hcdrop="${esc(s.st)}" aria-label="Entwurf ${esc(s.st)} verwerfen">Abbrechen</button>` : ''}<button class="btn ${s.due || draft ? 'kr' : 'ghost'} sm" data-hcgo="${esc(s.st)}">${draft ? 'Weiter ausfüllen' : 'Kontrolle starten'}</button></span>
         <div class="meta">${s.last ? `Letzte: ${DAYS[wdIdx(s.last.date)]} ${dmy(s.last.date)} · ${esc(s.last.by)}${s.last.dev ? ` · <span class="hc-due">${s.last.dev} Abweichung${s.last.dev>1?'en':''}</span>` : ' · ✓'}` : 'Noch keine Kontrolle in der App'}
         ${s.due ? ` · <span class="hc-due">fällig</span>` : ` · nächste in ${d.intervall - s.days} Tag${d.intervall - s.days === 1 ? '' : 'en'}`}</div></div>`;
     }).join('') : '';
     b.querySelectorAll('[data-hcgo]').forEach(x => x.onclick = () => hcStart(x.dataset.hcgo));
+    b.querySelectorAll('[data-hcdrop]').forEach(x => x.onclick = () => hcDropDialog(x.dataset.hcdrop, false));
   };
   const k = CACHE.get(cacheKey('haccp', {})); if (k) draw(JSON.parse(k.json));
   try { const d = await getData('haccp'); putCache(cacheKey('haccp', {}), d); draw(d); } catch(e) {}
