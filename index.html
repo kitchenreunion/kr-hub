@@ -35,7 +35,10 @@
   --blue:#8fc0ec; --blue-soft:#17283a; --orange:#f0a05e; --orange-soft:#3a2614; --violet:#c3a8ea; --violet-soft:#2a2238; --grey-soft:#262a26;
 }}
 *{box-sizing:border-box}
-html,body{margin:0;height:100%}
+html,body{margin:0}
+/* iPhone-App (Home-Bildschirm): Höhe immer = ganzer Bildschirm, sonst rutscht die Menüleiste bei kurzen Seiten nach oben */
+html{min-height:100%;min-height:calc(100% + env(safe-area-inset-top))}
+body{min-height:100vh;min-height:100dvh;overscroll-behavior-y:none}
 html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
 input,select,textarea{font-size:16px}  /* unter 16px zoomt das iPhone beim Antippen hinein */
 body{background:var(--bg);color:var(--ink);font:16px/1.45 var(--f-body);-webkit-tap-highlight-color:transparent}
@@ -334,6 +337,7 @@ body.padopen #view{padding-bottom:360px}
 <script>
 /* ================================================================ Konfiguration
    API_URL = URL der Apps-Script-Web-App (endet auf /exec). Leer = Demo-Modus. */
+const APP_VERSION = '20.11.2026 · 19:45';
 const API_URL = 'https://script.google.com/macros/s/AKfycbzmwPd2iu_6EQ5Ytwi1QRcD2S6HFpnUEqdXm3stLC_Xf9ddpH1LlG1y3vHgUvnq5_Lh/exec';
 const SPLASH_T0 = Date.now();
 function hideSplash(){
@@ -1477,7 +1481,8 @@ $('#avatarBtn').onclick = () => openSheet(`<h3>${esc(S.user.name)}</h3>
   </form>
   ${pushProfileHtml()}
   <button class="btn danger" id="logoutBtn">Abmelden</button>
-  <button class="btn ghost" data-close>Schliessen</button>`,
+  <button class="btn ghost" data-close>Schliessen</button>
+  <p class="small muted" style="margin:0;text-align:center">App-Version ${APP_VERSION}</p>`,
   () => {
     $('#logoutBtn').onclick = () => logout(false);
     $('#pinOpen').onclick = () => { $('#pinOpen').hidden = true; $('#pinForm').hidden = false; $('#pOld').focus(); };
