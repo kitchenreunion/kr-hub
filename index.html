@@ -619,11 +619,13 @@ async function startApp(fbToken){
   fbStart(fbToken);
   const cur = isoOf(mondayOf(new Date()));
   S.planMon = S.teamMon = cur;
+  if (location.search.includes('tab=')) applyNav(location.href);
   S.teamGroup = S.user.groups.includes(S.user.group) ? S.user.group : S.user.groups[0];
   renderTabs();
   try { await go(S.tab); } finally { hideSplash(); }
   await refreshBadge();
   prefetch();
+  setTimeout(pushRefresh, 3000);
 }
 
 /* ================================================================ Tabs */
@@ -708,6 +710,7 @@ function renderPlan(d, mon){
   $('#view').innerHTML = `
     <div class="view-head"><h2>Mein Plan</h2><span class="muted small">${esc(S.user.stamm || '')}</span></div>
     <div id="newsBanner"></div>
+    <div id="pushBanner"></div>
     <div id="swapBox" style="display:grid;gap:12px"></div>
     ${weekNav(mon, mon)}
     ${!d.exists ? `<div class="card"><p class="empty" style="margin:0">Für diese Woche ist noch kein Dienstplan erstellt.</p></div>` : `
@@ -723,7 +726,7 @@ function renderPlan(d, mon){
       </div>`).join('')}
     </div>`}`;
   bindWeekNav(m => { S.planMon = m; viewPlan(); });
-  planBanner();
+  planBanner(); pushBanner();
   document.querySelectorAll('[data-swd]').forEach(b => b.onclick = () => swapDialog(b.dataset.swd, b.dataset.swg, b.dataset.swv));
   loadSwapBox();
 }
@@ -1015,6 +1018,91 @@ function newsDialog(){
       catch(e){ $('#nSend').disabled = false; }
     }; });
 }
+
+/* ================================================================ Push-Benachrichtigungen */
+const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const isStandalone = () => window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+const pushState = () => {
+  if (DEMO || !S.settings || !S.settings.vapid) return 'off';
+  if (!('serviceWorker' in navigator) || !('Notification' in window) || !('PushManager' in window)) return isIOS && !isStandalone() ? 'install' : 'unsupported';
+  if (Notification.permission === 'denied') return 'denied';
+  return Notification.permission === 'granted' && localStorage.getItem('krhub_push') ? 'on' : 'ask';
+};
+const deviceName = () => (isIOS ? 'iPhone/iPad' : /Android/.test(navigator.userAgent) ? 'Android' : /Mac/.test(navigator.userAgent) ? 'Mac' : 'Computer') + ' · ' + new Date().toLocaleDateString('de-CH');
+async function pushToken(){
+  const reg = await navigator.serviceWorker.ready;
+  const m = await fbLoad();
+  const msg = await import(FB_SDK + 'firebase-messaging.js');
+  if (msg.isSupported && !(await msg.isSupported())) throw new Error('Dieses Gerät unterstützt keine Benachrichtigungen.');
+  return msg.getToken(msg.getMessaging(m.a), { vapidKey: S.settings.vapid, serviceWorkerRegistration: reg });
+}
+async function pushEnable(){
+  try {
+    const perm = await Notification.requestPermission();
+    if (perm !== 'granted') { toast(perm === 'denied' ? 'Benachrichtigungen blockiert – in den Einstellungen des Handys erlauben.' : 'Nicht aktiviert.', 5000); return false; }
+    const token = await pushToken();
+    if (!token) throw new Error('Kein Gerätecode erhalten.');
+    await api('pushRegister', { pushToken: token, device: deviceName(), appUrl: location.origin + location.pathname });
+    localStorage.setItem('krhub_push', token); localStorage.setItem('krhub_push_day', todayIso());
+    toast('🔔 Benachrichtigungen sind aktiv', 4000);
+    return true;
+  } catch(e) { console.warn(e); toast('Benachrichtigungen konnten nicht aktiviert werden: ' + (e.message || e), 6000); return false; }
+}
+async function pushDisable(){
+  const t = localStorage.getItem('krhub_push');
+  try { const msg = await import(FB_SDK + 'firebase-messaging.js'); const m = await fbLoad(); await msg.deleteToken(msg.getMessaging(m.a)); } catch(e) {}
+  if (t) { try { await api('pushUnregister', { pushToken: t }); } catch(e) {} }
+  localStorage.removeItem('krhub_push'); toast('Benachrichtigungen ausgeschaltet');
+}
+/* Einmal am Tag still prüfen, ob sich der Gerätecode geändert hat */
+async function pushRefresh(){
+  if (pushState() !== 'on' || localStorage.getItem('krhub_push_day') === todayIso()) return;
+  try {
+    const t = await pushToken();
+    if (t) { if (t !== localStorage.getItem('krhub_push')) await api('pushRegister', { pushToken: t, device: deviceName(), appUrl: location.origin + location.pathname }); localStorage.setItem('krhub_push', t); }
+    localStorage.setItem('krhub_push_day', todayIso());
+  } catch(e) {}
+}
+function pushBanner(){
+  const b = $('#pushBanner'); if (!b) return;
+  const st = pushState();
+  let dismissed = false; try { dismissed = localStorage.getItem('krhub_push_later') === todayIso(); } catch(e) {}
+  if (dismissed || !['ask', 'install'].includes(st)) { b.innerHTML = ''; return; }
+  b.innerHTML = st === 'install'
+    ? `<div class="banner" style="cursor:default;background:var(--blue-soft);color:var(--blue);border-color:var(--blue)"><span style="font-size:22px">🔔</span><span>Für Benachrichtigungen: Hub über «Teilen › Zum Home-Bildschirm» installieren und von dort öffnen.</span></div>`
+    : `<div class="banner" style="cursor:default;background:var(--blue-soft);color:var(--blue);border-color:var(--blue);flex-wrap:wrap"><span style="font-size:22px">🔔</span><span style="flex:1;min-width:160px">Benachrichtigungen aktivieren – z. B. bei Tauschanfragen und neuen Plänen</span>
+        <span class="row"><button class="btn ghost sm" id="pushLater">Später</button><button class="btn kr sm" id="pushOn">Aktivieren</button></span></div>`;
+  const on = $('#pushOn'); if (on) on.onclick = async () => { on.disabled = true; await pushEnable(); pushBanner(); };
+  const la = $('#pushLater'); if (la) la.onclick = () => { try { localStorage.setItem('krhub_push_later', todayIso()); } catch(e) {} pushBanner(); };
+}
+function pushProfileHtml(){
+  const st = pushState();
+  const txt = { on: '✓ Auf diesem Gerät aktiv', ask: 'Noch nicht aktiviert', denied: 'Im Handy blockiert – unter Einstellungen › Mitteilungen › KR Hub erlauben', install: 'Zuerst das Hub zum Home-Bildschirm hinzufügen und von dort öffnen', unsupported: 'Auf diesem Gerät/Browser nicht möglich', off: 'Noch nicht eingerichtet' }[st];
+  return `<div class="card"><div class="label">Benachrichtigungen</div><p class="small muted" style="margin:0">${txt}</p>
+    ${st === 'ask' ? '<button class="btn kr" id="pfPushOn">Benachrichtigungen aktivieren</button>' : ''}
+    ${st === 'on' ? '<div class="row"><button class="btn ghost grow" id="pfPushTest">Test senden</button><button class="btn ghost grow" id="pfPushOff">Ausschalten</button></div>' : ''}</div>`;
+}
+function bindPushProfile(){
+  const on = $('#pfPushOn'); if (on) on.onclick = async () => { on.disabled = true; if (await pushEnable()) closeSheet(); else on.disabled = false; };
+  const off = $('#pfPushOff'); if (off) off.onclick = async () => { await pushDisable(); closeSheet(); };
+  const te = $('#pfPushTest'); if (te) te.onclick = async () => { te.disabled = true; try { await api('pushTest'); toast('Test gesendet – kommt in wenigen Sekunden'); } catch(e) { toast(e.message, 5000); } te.disabled = false; };
+}
+/* Links aus Benachrichtigungen: ?tab=plan&mon=…&cat=news&sub=haccp */
+function applyNav(url){
+  try {
+    const q = new URL(url, location.href).searchParams;
+    if (!q.get('tab')) return false;
+    if (q.get('mon')) S.planMon = q.get('mon');
+    if (q.get('cat') === 'news') S.infoCat = 'News';
+    if (q.get('cat') === 'haccp') S.infoCat = 'HACCP & Hygiene';
+    if (q.get('sub')) S.kaderSub = q.get('sub');
+    S.tab = q.get('tab');
+    if (S.user) go(S.tab);
+    history.replaceState(null, '', location.pathname);
+    return true;
+  } catch(e) { return false; }
+}
+if ('serviceWorker' in navigator) navigator.serviceWorker.addEventListener('message', e => { if (e.data && e.data.nav) applyNav(e.data.nav); });
 
 /* ================================================================ Diensttausch */
 const swDay = d => `${DAYS[wdIdx(d)]} ${dm(d)}`;
@@ -1383,10 +1471,12 @@ $('#avatarBtn').onclick = () => openSheet(`<h3>${esc(S.user.name)}</h3>
     <label class="f">Neuer PIN (4–8 Ziffern)<input class="in pin" type="password" inputmode="numeric" id="pNew" autocomplete="new-password" pattern="[0-9]{4,8}" required></label>
     <button class="btn" type="submit">PIN speichern</button>
   </form>
+  ${pushProfileHtml()}
   <button class="btn danger" id="logoutBtn">Abmelden</button>
   <button class="btn ghost" data-close>Schliessen</button>`,
   () => {
     $('#logoutBtn').onclick = () => logout(false);
+    bindPushProfile();
     $('#pinForm').onsubmit = async ev => { ev.preventDefault();
       try { const r = await call('changePin', { oldPin: $('#pOld').value, newPin: $('#pNew').value }); closeSheet(); toast('PIN geändert');
         if (r && r.fb && FBX.mods) { try { await FBX.mods.auth.signInWithCustomToken(FBX.mods.au, r.fb); } catch(e) {} } } catch(e){} };
