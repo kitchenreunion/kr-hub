@@ -278,6 +278,7 @@ details.info-card[open] summary::after{content:"−"}
 .pad-grid button.kr{background:var(--kr);color:var(--kr-ink);font-size:18px;grid-column:span 2}
 body.padopen #view{padding-bottom:360px}
 /* Diensttausch */
+.card.pub{gap:6px}
 .swap-grid{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;align-items:baseline}
 .card.swap-in{border-color:var(--kr);box-shadow:0 0 0 1px var(--kr) inset}
 .swap-opts{display:grid;gap:8px}
@@ -337,7 +338,7 @@ body.padopen #view{padding-bottom:360px}
 <script>
 /* ================================================================ Konfiguration
    API_URL = URL der Apps-Script-Web-App (endet auf /exec). Leer = Demo-Modus. */
-const APP_VERSION = '20.11.2026 · 19:45';
+const APP_VERSION = '20.11.2026 · 20:20';
 const API_URL = 'https://script.google.com/macros/s/AKfycbzmwPd2iu_6EQ5Ytwi1QRcD2S6HFpnUEqdXm3stLC_Xf9ddpH1LlG1y3vHgUvnq5_Lh/exec';
 const SPLASH_T0 = Date.now();
 function hideSplash(){
@@ -482,6 +483,7 @@ function fbGet(action, p){
     case 'approvals': return M.approvals;
     case 'haccp': return M.haccp;
     case 'swaps': return M.swaps;
+    case 'pubStatus': return M.pub;
     case 'haccpKader': return M.haccpKader;
     case 'adminPage': return M.sperrList && M.adminUsers ? { sp: M.sperrList, us: M.adminUsers } : undefined;
     case 'myPlan': { const w = FBX.weeks[p.monday]; return w ? w.my : undefined; }
@@ -526,7 +528,7 @@ let GEN = 0; // Sitzungs-Zähler: Antworten aus einer früheren Anmeldung werden
 const INVALIDATE = {
   wishCreate:['wishList','myPlan','approvals'], wishCancel:['wishList','myPlan','approvals'],
   decide:['approvals','teamPlan','myPlan','wishList'], sperrAdd:['adminPage','wishList'], sperrDelete:['adminPage','wishList'],
-  adminSetPin:['adminPage'], haccpSubmit:['haccp','haccpKader'], swapCreate:['swaps'], swapRespond:['swaps','approvals'], swapCancel:['swaps','approvals'], swapDecide:['approvals','swaps','myPlan','teamPlan'], haccpAck:['haccpKader'], infoRead:['infos'], newsCreate:['infos'], newsHide:['infos'], newsDelete:['infos'],
+  adminSetPin:['adminPage'], haccpSubmit:['haccp','haccpKader'], pubWeek:['pubStatus'], swapCreate:['swaps'], swapRespond:['swaps','approvals'], swapCancel:['swaps','approvals'], swapDecide:['approvals','swaps','myPlan','teamPlan'], haccpAck:['haccpKader'], infoRead:['infos'], newsCreate:['infos'], newsHide:['infos'], newsDelete:['infos'],
 };
 const cacheKey = (action, payload) => action + '|' + JSON.stringify(payload || {});
 const cacheStoreKey = () => 'krhub_cache_' + (S.user ? S.user.name : '');
@@ -844,7 +846,7 @@ function viewApprove(){
 function renderApprove(d){
   if (!kb()) return;
   if (S.openCount !== openCountOf(d)) { S.openCount = openCountOf(d); renderTabs(); }
-  kb().innerHTML = swapApproveHtml(d.swaps) + `
+  kb().innerHTML = '<div id="pubBox" style="display:grid;gap:10px"></div>' + swapApproveHtml(d.swaps) + `
     <div class="label">${d.open.length} offene Freiwünsche</div>
     ${d.open.length ? d.open.map(w => `
       <div class="card req">
@@ -861,7 +863,7 @@ function renderApprove(d){
     ${d.done.length ? `<div class="label">Zuletzt entschieden</div><div class="card list">${d.done.map(w => `
       <div class="li"><div><b>${esc(w.name)}</b> <span class="muted small">${DAYS[wdIdx(w.date)]} ${dmy(w.date)}</span></div><span class="chip c-${w.status}">${esc(w.status)}</span>
       <div class="sub">von ${esc(w.by)}${w.plan?` · Plan: ${esc(w.plan)}`:''}${w.answer?` · «${esc(w.answer)}»`:''}</div></div>`).join('')}</div>` : ''}`;
-  bindSwapApprove();
+  bindSwapApprove(); loadPubBox();
   document.querySelectorAll('[data-yes]').forEach(b => b.onclick = () => decide(b.dataset.yes, 'Genehmigt', ''));
   document.querySelectorAll('[data-no]').forEach(b => b.onclick = () => openSheet(`<h3>Ablehnen</h3>
     <label class="f">Begründung für die Person<textarea class="in" id="noReason" maxlength="300" placeholder="z. B. Bereits zwei Personen frei"></textarea></label>
@@ -873,7 +875,7 @@ async function decide(id, decision, answer){
     const r = await call('decide', { id, decision, answer });
     toast(decision === 'Genehmigt' ? 'Genehmigt · Plan: ' + (r.plan || '–') : 'Abgelehnt', 5000);
     viewApprove();
-  } catch(e){}
+  } catch(e){ if (isStale(e)) selfSync(true); }
 }
 
 /* ================================================================ Admin */
@@ -1111,6 +1113,50 @@ function applyNav(url){
 }
 if ('serviceWorker' in navigator) navigator.serviceWorker.addEventListener('message', e => { if (e.data && e.data.nav) applyNav(e.data.nav); });
 
+/* ================================================================ Daten neu laden */
+/* Holt die eigenen Ansichten frisch vom Server (falls etwas veraltet aussieht) und zeichnet neu. */
+async function selfSync(silent){
+  if (DEMO) { if (!silent) toast('Aktualisiert'); return; }
+  try {
+    const v = await api('selfSync');
+    if (v) fbApply(v);
+    CACHE.clear(); saveCache();
+    S.hc = null; go(S.tab); refreshBadge();
+    if (!silent) toast('🔄 Daten neu geladen');
+  } catch(e) { if (!silent) toast(e.message, 5000); }
+}
+/* Meldet der Server «schon erledigt», ist die eigene Ansicht veraltet → still neu laden */
+const isStale = e => /bereits bearbeitet|nicht \(mehr\)|nicht mehr offen|abgelaufen/i.test(e && e.message || '');
+
+/* ================================================================ Dienstplan veröffentlichen (Kader) */
+async function loadPubBox(){
+  const draw = d => {
+    const b = $('#pubBox'); if (!b) return;
+    const todo = d.filter(x => (x.first && x.planned) || (!x.first && x.count));
+    const ok = d.filter(x => !x.first && !x.count);
+    const at = s => { const t = new Date(s); return `${pad(t.getDate())}.${pad(t.getMonth()+1)}. ${pad(t.getHours())}:${pad(t.getMinutes())}`; };
+    b.innerHTML = !d.length ? '' : `<div class="label">Dienstplan veröffentlichen</div>
+      ${todo.map(x => `<div class="card pub"><div class="row" style="justify-content:space-between"><b>${weekLabel(x.monday).kw} · ${esc(x.group)}</b><span class="small muted">${weekLabel(x.monday).range}</span></div>
+        <div class="small ${x.first ? '' : 'muted'}">${x.first ? `Noch nicht veröffentlicht · ${x.planned} Person${x.planned === 1 ? '' : 'en'} eingeplant` : `Veröffentlicht ${at(x.at)} · <b style="color:var(--amber)">${x.count} Änderung${x.count === 1 ? '' : 'en'}</b> seither`}</div>
+        <button class="btn ${x.first ? 'kr' : ''} sm" style="justify-self:start" data-pub='${esc(JSON.stringify({ monday: x.monday, group: x.group }))}'>${x.first ? '📣 Veröffentlichen' : '📣 Änderungen senden'}</button></div>`).join('')}
+      ${ok.length ? `<div class="small muted">✓ Aktuell: ${ok.map(x => weekLabel(x.monday).kw + ' ' + esc(x.group)).join(' · ')}</div>` : ''}`;
+    b.querySelectorAll('[data-pub]').forEach(btn => btn.onclick = () => {
+      const p = JSON.parse(btn.dataset.pub), x = d.find(y => y.monday === p.monday && y.group === p.group);
+      openSheet(`<h3>${weekLabel(x.monday).kw} · ${esc(x.group)}</h3>
+        <p style="margin:0">${x.first ? `Diese Personen erhalten «Dein Dienstplan ${weekLabel(x.monday).kw} ist da»:` : `Diese Personen erhalten «Dein Plan ${weekLabel(x.monday).kw} wurde angepasst»:`}</p>
+        <p class="small" style="margin:0"><b>${x.names.map(esc).join(', ')}</b></p>
+        <div class="row"><button class="btn ghost grow" data-close>Abbrechen</button><button class="btn kr grow" id="pubGo">Senden</button></div>`,
+        () => { $('#pubGo').onclick = async () => {
+          $('#pubGo').disabled = true;
+          try { const r = await call('pubWeek', p); closeSheet(); toast(`📣 ${r.count} Person${r.count === 1 ? '' : 'en'} benachrichtigt${r.quiet ? ' – wegen der Ruhezeit am Morgen' : ''}`, 5000); loadPubBox(); }
+          catch(e) { $('#pubGo').disabled = false; }
+        }; });
+    });
+  };
+  const k = CACHE.get(cacheKey('pubStatus', {})); if (k) draw(JSON.parse(k.json));
+  try { const d = await getData('pubStatus'); putCache(cacheKey('pubStatus', {}), d); draw(d); } catch(e) {}
+}
+
 /* ================================================================ Diensttausch */
 const swDay = d => `${DAYS[wdIdx(d)]} ${dm(d)}`;
 const swVal = v => esc(v).replace(' ', ' · ');
@@ -1142,7 +1188,7 @@ async function loadSwapBox(){
   try { const d = await getData('swaps'); putCache(cacheKey('swaps', {}), d); draw(d); } catch(e) {}
 }
 async function swapRespond(id, accept){
-  try { await call('swapRespond', { id, accept }); toast(accept ? 'Angenommen – jetzt entscheidet die Filialleitung' : 'Abgelehnt', 4500); loadSwapBox(); } catch(e) {}
+  try { await call('swapRespond', { id, accept }); toast(accept ? 'Angenommen – jetzt entscheidet die Filialleitung' : 'Abgelehnt', 4500); loadSwapBox(); } catch(e) { if (isStale(e)) selfSync(true); }
 }
 /* Dialog: Gegendienst wählen */
 async function swapDialog(date, group, value){
@@ -1202,12 +1248,12 @@ function bindSwapApprove(){
   document.querySelectorAll('[data-swdyes]').forEach(b => b.onclick = async () => {
     b.disabled = true;
     try { await call('swapDecide', { id: b.dataset.swdyes, decision: 'Genehmigt' }); toast('Genehmigt – Dienste im Plan getauscht', 4500); viewApprove(); }
-    catch(e) { b.disabled = false; viewApprove(); }
+    catch(e) { b.disabled = false; if (isStale(e)) selfSync(true); else viewApprove(); }
   });
   document.querySelectorAll('[data-swdno]').forEach(b => b.onclick = () => openSheet(`<h3>Tausch ablehnen</h3>
     <label class="f">Begründung<textarea class="in" id="swNo" maxlength="300" placeholder="z. B. Am Mittwoch brauche ich eine erfahrene Person"></textarea></label>
     <div class="row"><button class="btn ghost grow" data-close>Abbrechen</button><button class="btn danger grow" id="swNoGo">Ablehnen</button></div>`,
-    () => { $('#swNoGo').onclick = async () => { const r = $('#swNo').value; closeSheet(); try { await call('swapDecide', { id: b.dataset.swdno, decision: 'Abgelehnt', answer: r }); toast('Abgelehnt'); viewApprove(); } catch(e) {} }; }));
+    () => { $('#swNoGo').onclick = async () => { const r = $('#swNo').value; closeSheet(); try { await call('swapDecide', { id: b.dataset.swdno, decision: 'Abgelehnt', answer: r }); toast('Abgelehnt'); viewApprove(); } catch(e) { if (isStale(e)) selfSync(true); } }; }));
 }
 
 /* ================================================================ HACCP */
@@ -1480,11 +1526,13 @@ $('#avatarBtn').onclick = () => openSheet(`<h3>${esc(S.user.name)}</h3>
     <button class="btn" type="submit">PIN speichern</button>
   </form>
   ${pushProfileHtml()}
+  <button class="btn ghost" id="syncBtn">🔄 Daten neu laden</button>
   <button class="btn danger" id="logoutBtn">Abmelden</button>
   <button class="btn ghost" data-close>Schliessen</button>
   <p class="small muted" style="margin:0;text-align:center">App-Version ${APP_VERSION}</p>`,
   () => {
     $('#logoutBtn').onclick = () => logout(false);
+    $('#syncBtn').onclick = () => { closeSheet(); selfSync(false); };
     $('#pinOpen').onclick = () => { $('#pinOpen').hidden = true; $('#pinForm').hidden = false; $('#pOld').focus(); };
     bindPushProfile();
     $('#pinForm').onsubmit = async ev => { ev.preventDefault();
@@ -1671,6 +1719,8 @@ async function demoApi(req){
         }).sort((a,b) => a.date < b.date ? -1 : 1);
         return { ok:true, data:{ open, done: mine.filter(w => ['Genehmigt','Abgelehnt'].includes(w.status)), swaps: demoSwapApprovals(P) } };
       }
+      case 'pubStatus': return { ok:true, data: P.approves.length ? Object.keys(DB.weeks).slice(0, 2).map((m, i) => ({ monday:m, group:'Shoppi Tivoli', first: i === 1, at: i ? '' : new Date().toISOString(), count: i ? 0 : 2, names: i ? ['Dean','Michelle','Noel','Maria'] : ['Dean','Noel'], planned: 4 })) : [] };
+      case 'pubWeek': return { ok:true, data:{ count: 2, first: false, quiet: false } };
       case 'swaps': case 'swapOptions': case 'swapCreate': case 'swapRespond': case 'swapCancel': case 'swapDecide': return demoSwap(req, u, P, blocksOf, fail);
       case 'decide': {
         const w = DB.wishes.find(x => x.id===req.id); if (!w || w.status!=='Offen') return fail('Nicht möglich.');
