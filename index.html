@@ -230,12 +230,15 @@ details.info-card[open] summary::after{content:"−"}
 .hc-due{color:var(--red);font-weight:700}
 .hc-prog{height:6px;background:var(--grey-soft);border-radius:99px;overflow:hidden}
 .hc-prog i{display:block;height:100%;background:var(--kr)}
-.hc-item{display:grid;grid-template-columns:1fr auto;gap:8px 10px;align-items:center;padding:12px 0;border-top:1px solid var(--line)}
+.hc-item{display:grid;grid-template-columns:minmax(40%,1fr) auto;gap:8px 10px;align-items:center;padding:12px 0;border-top:1px solid var(--line)}
 .hc-item:first-of-type{border-top:0}
 .hc-item .nm{font-weight:700;min-width:0;overflow-wrap:anywhere}
 .hc-item .nm small{display:block;font-weight:400;color:var(--muted);font-size:13px}
 .hc-item .ctl{display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
 .hc-item .full{grid-column:1/-1}
+.tog[data-f="skip"]{max-width:74px;white-space:normal;line-height:1.15;padding:6px 8px;font-size:12px}
+.hc-item .ctl{flex-wrap:nowrap}
+.hc-sub{display:flex;gap:10px;justify-content:space-between;align-items:center;font-size:14px;color:var(--muted)}
 .hc-item.bad .nm{color:var(--red)}
 .hc-item.bad .tin{border-color:var(--red);background:var(--red-soft);color:var(--red)}
 .hc-item .note{display:none}
@@ -256,6 +259,18 @@ details.info-card[open] summary::after{content:"−"}
 .hc-err{color:var(--red);font-weight:700;font-size:14px}
 .hc-dev{border-left:4px solid var(--red)}
 .hc-sum{display:flex;gap:16px;flex-wrap:wrap}
+.tin{cursor:pointer;caret-color:transparent}
+.tin.active{outline:3px solid var(--kr);outline-offset:1px}
+.pad{position:fixed;left:0;right:0;bottom:0;z-index:60;background:var(--surface);border-top:1px solid var(--line);box-shadow:0 -8px 24px rgba(0,0,0,.18);padding:10px 12px calc(10px + env(safe-area-inset-bottom));max-width:600px;margin:0 auto;border-radius:16px 16px 0 0}
+.pad-top{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:2px 4px 10px}
+.pad-top small{display:block;color:var(--muted);font-size:13px}
+.pad-val{font-family:var(--f-mono);font-size:24px;font-weight:600;white-space:nowrap}
+.pad-val.bad{color:var(--red)}
+.pad-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.pad-grid button{border:0;border-radius:12px;background:var(--grey-soft);font-size:24px;font-weight:600;padding:13px 0;cursor:pointer;color:var(--ink);touch-action:manipulation}
+.pad-grid button:active{filter:brightness(.9)}
+.pad-grid button.kr{background:var(--kr);color:var(--kr-ink);font-size:18px;grid-column:span 2}
+body.padopen #view{padding-bottom:360px}
 </style>
 </head>
 <body>
@@ -622,6 +637,7 @@ function renderTabs(){
 }
 function go(tab){
   if (!tabList().some(t => t[0]===tab)) tab = 'plan';
+  if (typeof hcPadClose === 'function') hcPadClose();
   if (S.hc && (tab !== 'info' || S.tab !== 'info')) { hcSave(); S.hc = null; }
   S.tab = tab; renderTabs(); window.scrollTo(0,0);
   return ({plan:viewPlan, team:viewTeam, wish:viewWish, info:viewInfo, kader:viewKader})[tab]();
@@ -1020,21 +1036,22 @@ function hcStart(st){
   S.hc.st = st; S.tab = 'info'; renderTabs(); renderHaccpForm(); window.scrollTo(0,0);
 }
 function hcSave(){ if (!S.hc) return; try { localStorage.setItem(hcDraftKey(S.hc.st), JSON.stringify(S.hc)); } catch(e) {} }
-function hcClose(){ S.hc = null; viewInfo(); }
+function hcClose(){ hcPadClose(); S.hc = null; viewInfo(); }
 function hcSteps(){ const s = hcStation(S.hc.st); return s ? HC_TEILE.filter(t => s.items.some(i => i.teil === t)).concat(['Abschluss']) : ['Abschluss']; }
 const hcVal = id => (S.hc.values[id] = S.hc.values[id] || {});
 
 function hcItemHtml(c){
   const x = S.hc.values[c.id] || {}, st = hcState(c, x), cls = st === 'bad' ? 'bad' : '';
-  const num = (dis, ph='°C') => `<input class="tin" data-hcv="${c.id}" inputmode="decimal" autocomplete="off" placeholder="${ph}" value="${esc(x.v ?? '')}" ${dis?'disabled':''} aria-label="${esc(c.p)} Temperatur">`;
+  const num = (dis, ph='°C') => `<input class="tin" data-hcv="${c.id}" readonly inputmode="none" autocomplete="off" placeholder="${ph}" value="${esc(x.v ?? '')}" ${dis?'disabled':''} aria-label="${esc(c.p)} Wert">`;
   const tog = (f, l) => `<button class="tog" data-hct="${c.id}" data-f="${f}" aria-pressed="${!!x[f]}">${l}</button>`;
   const seg = (f, opts) => `<span class="seg">${opts.map(([v, l, k]) => `<button class="${k||''}" data-hcs="${c.id}" data-f="${f}" data-v='${JSON.stringify(v)}' aria-pressed="${x[f] === v}">${l}</button>`).join('')}</span>`;
   const note = `<input class="in note full" data-hcn="${c.id}" maxlength="300" placeholder="${c.art === 'Temperatur' ? 'Massnahme, z. B. Ware umgelagert, Techniker gerufen' : 'Massnahme / was wurde gemacht?'}" value="${esc(x.note || '')}">`;
   const name = `<div class="nm">${esc(c.p)}${hcSoll(c) ? `<small>Soll ${esc(hcSoll(c))}</small>` : ''}</div>`;
-  let ctl = '';
+  let ctl = '', extra = '';
   if (c.art === 'Temperatur') ctl = num(x.off) + tog('off', 'Aus');
-  else if (c.art === 'Erhitzen') ctl = num(x.skip) + tog('skip', 'Nicht gekocht');
-  else if (c.art === 'Abkühlen') ctl = num(x.skip) + tog('skip', 'Nicht gekocht') + (x.skip ? '' : `<span class="full" style="display:flex;gap:8px;justify-content:flex-end;align-items:center"><span class="small muted">in ${Number(c.opt)||90} Min.?</span>${seg('inTime', [[true,'Ja','okb'],[false,'Nein','badb']])}</span>`);
+  else if (c.art === 'Erhitzen') ctl = num(x.skip) + tog('skip', 'nicht gekocht');
+  else if (c.art === 'Abkühlen') { ctl = num(x.skip) + tog('skip', 'nicht gekocht');
+    if (!x.skip) extra = `<div class="full hc-sub"><span>Unter ${hcF(c.max ?? 5)} °C in ${Number(c.opt)||90} Min. erreicht?</span>${seg('inTime', [[true,'Ja','okb'],[false,'Nein','badb']])}</div>`; }
   else if (c.art === 'Prüfung') ctl = seg('ok', [[true,'OK','okb'],[false,'Fehler','badb'],['na','Entfällt']]);
   else if (c.art === 'Öl') {
     const fr = c.opt.split(',').map(s => s.trim()).filter(Boolean);
@@ -1055,10 +1072,11 @@ function hcItemHtml(c){
       <div class="full row" style="justify-content:space-between"><span>Verpackung / Gebinde in Ordnung?</span>${seg('verp', [[true,'Ja','okb'],[false,'Nein','badb']])}</div>
       ${note}</div>`;
   }
-  return `<div class="hc-item ${cls}" data-item="${c.id}">${name}<div class="ctl">${ctl}</div><div class="full hc-err" data-errfor="${c.id}" ${st === 'err' ? '' : 'hidden'}>Bitte nur eine Zahl eingeben, z. B. 4,5 oder -18</div>${note}</div>`;
+  return `<div class="hc-item ${cls}" data-item="${c.id}">${name}<div class="ctl">${ctl}</div>${extra}<div class="full hc-err" data-errfor="${c.id}" ${st === 'err' ? '' : 'hidden'}>Bitte nur eine Zahl eingeben, z. B. 4,5 oder -18</div>${note}</div>`;
 }
 
 function renderHaccpForm(){
+  hcPadClose();
   const s = hcStation(S.hc.st);
   if (!s) { S.hc = null; return viewInfo(); }
   const steps = hcSteps(); S.hc.step = Math.min(S.hc.step, steps.length - 1);
@@ -1098,7 +1116,7 @@ function hcBind(s, items, teil, steps){
   // Beim Tippen nur die Zeile aktualisieren (kein Neuzeichnen → Fokus bleibt)
   const refreshRow = id => { const c = find(id), row = V.querySelector(`[data-item="${id}"]`); if (!row) return; const st = hcState(c, S.hc.values[id]);
     row.classList.toggle('bad', st === 'bad'); const e = row.querySelector('[data-errfor]'); if (e) e.hidden = st !== 'err'; };
-  V.querySelectorAll('[data-hcv]').forEach(i => { i.oninput = () => { hcVal(i.dataset.hcv).v = i.value; hcSave(); refreshRow(i.dataset.hcv); }; });
+  V.querySelectorAll('[data-hcv]').forEach(i => { i.onclick = () => hcPad(i, find(i.dataset.hcv), refreshRow); });
   V.querySelectorAll('[data-hcn]').forEach(i => i.oninput = () => { hcVal(i.dataset.hcn).note = i.value; hcSave(); });
   V.querySelectorAll('[data-hctx]').forEach(i => i.oninput = () => { hcVal(i.dataset.hctx)[i.dataset.f] = i.value; hcSave(); });
   V.querySelectorAll('[data-hcsel]').forEach(i => i.onchange = () => { hcVal(i.dataset.hcsel)[i.dataset.f] = i.value; hcSave(); });
@@ -1131,6 +1149,49 @@ function hcBind(s, items, teil, steps){
     } catch(e) { send.disabled = false; $('#hcMsg').textContent = e.message; }
   };
 }
+
+/* Eigene Zahlentastatur (iPhone-Tastatur hat kein Minus) */
+function hcPad(input, c, refreshRow){
+  hcPadClose();
+  const id = input.dataset.hcv, x = hcVal(id);
+  const tk = c && c.art === 'Temperatur' && c.max != null && c.max < 0;
+  let v = String(x.v ?? '');
+  if (!v && tk) v = '-';
+  const set = nv => { v = nv; x.v = v; input.value = v; hcSave(); refreshRow(id); upd(); };
+  document.querySelectorAll('.tin.active').forEach(e => e.classList.remove('active'));
+  input.classList.add('active');
+  const el = document.createElement('div');
+  el.className = 'pad'; el.id = 'hcPad';
+  el.innerHTML = `<div class="pad-top"><div><b>${esc(c ? c.p : '')}</b><small>${c && hcSoll(c) ? 'Soll ' + esc(hcSoll(c)) : ''}${tk ? ' · Minuswert' : ''}</small></div><span class="pad-val" id="padVal"></span></div>
+    <div class="pad-grid">${['1','2','3','4','5','6','7','8','9','±','0',','].map(k => `<button data-k="${k}">${k === '±' ? '+/−' : k}</button>`).join('')}
+      <button data-k="del" aria-label="Löschen">⌫</button><button data-k="next" class="kr">Weiter ›</button></div>`;
+  document.body.appendChild(el); document.body.classList.add('padopen');
+  const upd = () => { const n = hcNum(v), b = $('#padVal'); b.textContent = (v || '–') + ' °C'; b.className = 'pad-val' + (n !== null && !isNaN(n) && c && hcState(c, { v, inTime: true }) === 'bad' ? ' bad' : ''); };
+  if (v !== String(x.v ?? '')) { x.v = v; input.value = v; hcSave(); }
+  upd();
+  // Feld über die Tastatur schieben
+  const r = input.getBoundingClientRect(), free = window.innerHeight - el.offsetHeight - 24;
+  if (r.bottom > free || r.top < 70) window.scrollBy({ top: r.bottom - free + (r.top < 70 ? -free / 2 : 0), behavior: 'smooth' });
+  el.querySelectorAll('[data-k]').forEach(b => b.onclick = () => {
+    const k = b.dataset.k;
+    if (k === 'del') return set(v.slice(0, -1));
+    if (k === '±') return set(v.startsWith('-') ? v.slice(1) : '-' + v);
+    if (k === ',') { if (!v.includes(',') && /\d$/.test(v)) set(v + ','); return; }
+    if (k === 'next') {
+      const all = [...document.querySelectorAll('#view [data-hcv]:not(:disabled)')], i = all.indexOf(input);
+      const nx = all[i + 1]; if (nx) return nx.click();
+      return hcPadClose();
+    }
+    if (/,\d$/.test(v)) return; // eine Nachkommastelle genügt
+    if (v.replace('-', '').replace(',', '').length >= 4) return;
+    set(v + k);
+  });
+}
+function hcPadClose(){
+  const p = $('#hcPad'); if (p) p.remove(); document.body.classList.remove('padopen');
+  document.querySelectorAll('.tin.active').forEach(e => e.classList.remove('active'));
+}
+document.addEventListener('click', e => { if ($('#hcPad') && !e.target.closest('#hcPad') && !e.target.closest('[data-hcv]')) hcPadClose(); }, true);
 
 /* Infos › HACCP: Karten pro Station */
 async function loadHaccpBox(){
