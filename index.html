@@ -2,7 +2,7 @@
 <html lang="de">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
 <title>Kitchen Reunion Hub</title>
 <meta name="theme-color" content="#1c1c1c">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -36,6 +36,8 @@
 }}
 *{box-sizing:border-box}
 html,body{margin:0;height:100%}
+html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
+input,select,textarea{font-size:16px}  /* unter 16px zoomt das iPhone beim Antippen hinein */
 body{background:var(--bg);color:var(--ink);font:16px/1.45 var(--f-body);-webkit-tap-highlight-color:transparent}
 button,input,select,textarea{font:inherit;color:inherit}
 :focus-visible{outline:3px solid var(--kr);outline-offset:2px}
@@ -216,6 +218,7 @@ details.info-card[open] summary::after{content:"−"}
 
 /* sheet */
 .scrim{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:40;display:grid;align-items:end}
+.sheet:focus{outline:none}
 .sheet{background:var(--surface);border-radius:18px 18px 0 0;padding:20px 0 calc(20px + env(safe-area-inset-bottom));max-height:90vh;overflow:auto}
 .sheet .wrap{display:grid;gap:14px}
 .sheet h3{font-size:26px;text-transform:uppercase}
@@ -1465,7 +1468,8 @@ function renderHaccpKader(d){
 /* ================================================================ Profil */
 $('#avatarBtn').onclick = () => openSheet(`<h3>${esc(S.user.name)}</h3>
   <p class="muted" style="margin:0">${esc(S.user.role)}${S.user.stamm?' · '+esc(S.user.stamm):''}${S.user.bereich?' · '+esc(S.user.bereich):''}</p>
-  <form id="pinForm" class="card">
+  <button class="btn ghost" type="button" id="pinOpen">PIN ändern</button>
+  <form id="pinForm" class="card" hidden>
     <div class="label">PIN ändern</div>
     <label class="f">Bisheriger PIN<input class="in pin" type="password" inputmode="numeric" id="pOld" autocomplete="current-password" required></label>
     <label class="f">Neuer PIN (4–8 Ziffern)<input class="in pin" type="password" inputmode="numeric" id="pNew" autocomplete="new-password" pattern="[0-9]{4,8}" required></label>
@@ -1476,6 +1480,7 @@ $('#avatarBtn').onclick = () => openSheet(`<h3>${esc(S.user.name)}</h3>
   <button class="btn ghost" data-close>Schliessen</button>`,
   () => {
     $('#logoutBtn').onclick = () => logout(false);
+    $('#pinOpen').onclick = () => { $('#pinOpen').hidden = true; $('#pinForm').hidden = false; $('#pOld').focus(); };
     bindPushProfile();
     $('#pinForm').onsubmit = async ev => { ev.preventDefault();
       try { const r = await call('changePin', { oldPin: $('#pOld').value, newPin: $('#pNew').value }); closeSheet(); toast('PIN geändert');
@@ -1490,7 +1495,9 @@ function openSheet(html, bind, onClose){
   $('#scrim').onclick = e => { if (e.target.id === 'scrim') closeSheet(); };
   $('#sheetHost').querySelectorAll('[data-close]').forEach(b => b.onclick = closeSheet);
   if (bind) bind();
-  const f = $('#sheetHost').querySelector('textarea,input,button:not([data-close])'); if (f) f.focus();
+  // Am Handy nicht automatisch ins Eingabefeld springen (sonst geht sofort die Tastatur auf)
+  const dlg = $('#sheetHost .sheet');
+  if (dlg) { dlg.setAttribute('tabindex', '-1'); dlg.focus({ preventScroll: true }); }
 }
 function closeSheet(){ $('#sheetHost').innerHTML = ''; if (onSheetClose) { const f = onSheetClose; onSheetClose = null; f(); } if (FBX.pending) fbChanged(); }
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeSheet(); });
