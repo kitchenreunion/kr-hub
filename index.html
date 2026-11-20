@@ -287,6 +287,13 @@ body.padopen #view{padding-bottom:360px}
 .swap-opt:active{border-color:var(--kr)}
 .swap-p{display:grid;gap:2px;padding:8px 0;border-top:1px solid var(--line)}
 .shift .swbtn{border:1px solid var(--line);background:var(--surface);border-radius:8px;padding:2px 8px;font-size:13px;font-weight:700;cursor:pointer;color:var(--ink);margin-left:6px}
+/* Rückmeldung beim Antippen */
+.btn,.chipbtn,.tab,.swap-opt,.seg button,.tog,.pad-grid button,.swbtn,.banner,.callbtn,.linkbtn,.cal button,.weeknav button{transition:transform .08s ease,filter .08s ease;-webkit-tap-highlight-color:transparent;touch-action:manipulation}
+.btn:active,.chipbtn:active,.tab:active,.swap-opt:active,.seg button:active,.tog:active,.pad-grid button:active,.swbtn:active,.banner:active,.callbtn:active,.linkbtn:active,.cal button:active,.weeknav button:active{transform:scale(.95);filter:brightness(.88)}
+.btn.busy{position:relative;color:transparent!important;pointer-events:none}
+.btn.busy::after{content:'';position:absolute;left:50%;top:50%;width:18px;height:18px;margin:-11px 0 0 -11px;border-radius:50%;border:2.5px solid rgba(128,128,128,.35);border-top-color:var(--kr-deep);animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.hapt{position:fixed;left:-100px;top:0;opacity:0;pointer-events:none}
 </style>
 </head>
 <body>
@@ -338,7 +345,7 @@ body.padopen #view{padding-bottom:360px}
 <script>
 /* ================================================================ Konfiguration
    API_URL = URL der Apps-Script-Web-App (endet auf /exec). Leer = Demo-Modus. */
-const APP_VERSION = '20.11.2026 · 20:20';
+const APP_VERSION = '20.11.2026 · 21:00';
 const API_URL = 'https://script.google.com/macros/s/AKfycbzmwPd2iu_6EQ5Ytwi1QRcD2S6HFpnUEqdXm3stLC_Xf9ddpH1LlG1y3vHgUvnq5_Lh/exec';
 const SPLASH_T0 = Date.now();
 function hideSplash(){
@@ -572,9 +579,27 @@ async function prefetch(){
     const g = GEN; try { const [sp, us] = await Promise.all([api('sperrList'), api('adminUsers')]); if (g === GEN) putCache(cacheKey('adminPage', {}), { sp, us }); } catch(e) {}
   }
 }
+/* ---------- Rückmeldung: gedrückter Knopf zeigt einen Ladekreis, kurzes Vibrieren */
+let LAST_BTN = null, HAPT = null;
+function haptic(){
+  try {
+    if (navigator.vibrate) { navigator.vibrate(10); return; }
+    if (!HAPT) { // iPhone (ab iOS 18): Antippen eines «Schalters» löst ein kurzes Vibrieren aus
+      const i = document.createElement('input'); i.type = 'checkbox'; i.setAttribute('switch', ''); i.id = 'haptSw'; i.className = 'hapt'; i.tabIndex = -1; i.setAttribute('aria-hidden', 'true');
+      const l = document.createElement('label'); l.htmlFor = 'haptSw'; l.className = 'hapt'; l.setAttribute('aria-hidden', 'true');
+      document.body.append(i, l); HAPT = l;
+    }
+    HAPT.click();
+  } catch(e) {}
+}
+document.addEventListener('touchstart', () => {}, { passive: true }); // aktiviert :active auf dem iPhone
+document.addEventListener('click', e => { const b = e.target.closest && e.target.closest('button'); if (b && !b.disabled) { LAST_BTN = { el: b, t: Date.now() }; haptic(); } }, true);
 async function call(action, payload, opts={}){
+  const btn = LAST_BTN && Date.now() - LAST_BTN.t < 1500 && LAST_BTN.el.isConnected && LAST_BTN.el.classList.contains('btn') ? LAST_BTN.el : null;
+  if (btn) btn.classList.add('busy');
   try { return await api(action, payload); }
-  catch(e){ if (e.auth) { logout(true); } else if (!opts.silent) toast(e.message, 5000); throw e; }
+  catch(e){ haptic(); if (e.auth) { logout(true); } else if (!opts.silent) toast(e.message, 5000); throw e; }
+  finally { if (btn) btn.classList.remove('busy'); }
 }
 
 /* ================================================================ State */
