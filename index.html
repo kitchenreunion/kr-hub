@@ -271,6 +271,15 @@ details.info-card[open] summary::after{content:"−"}
 .pad-grid button:active{filter:brightness(.9)}
 .pad-grid button.kr{background:var(--kr);color:var(--kr-ink);font-size:18px;grid-column:span 2}
 body.padopen #view{padding-bottom:360px}
+/* Diensttausch */
+.swap-grid{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;align-items:baseline}
+.card.swap-in{border-color:var(--kr);box-shadow:0 0 0 1px var(--kr) inset}
+.swap-opts{display:grid;gap:8px}
+.swap-opt{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;text-align:left;border:1px solid var(--line);background:var(--surface);border-radius:12px;padding:10px 12px;cursor:pointer}
+.swap-opt small{grid-column:1/-1;color:var(--muted)}
+.swap-opt:active{border-color:var(--kr)}
+.swap-p{display:grid;gap:2px;padding:8px 0;border-top:1px solid var(--line)}
+.shift .swbtn{border:1px solid var(--line);background:var(--surface);border-radius:8px;padding:2px 8px;font-size:13px;font-weight:700;cursor:pointer;color:var(--ink);margin-left:6px}
 </style>
 </head>
 <body>
@@ -465,6 +474,7 @@ function fbGet(action, p){
     case 'infos': return M.infos;
     case 'approvals': return M.approvals;
     case 'haccp': return M.haccp;
+    case 'swaps': return M.swaps;
     case 'haccpKader': return M.haccpKader;
     case 'adminPage': return M.sperrList && M.adminUsers ? { sp: M.sperrList, us: M.adminUsers } : undefined;
     case 'myPlan': { const w = FBX.weeks[p.monday]; return w ? w.my : undefined; }
@@ -491,7 +501,8 @@ function fbChanged(){
     const me = FBX.main.me;
     if (me && JSON.stringify(me.user) !== JSON.stringify(S.user)) { S.user = me.user; S.settings = me.settings; saveUser(); }
     S.infoUnread = (FBX.main.infos?.items || []).filter(x => x.confirm && !x.read).length;
-    if (FBX.main.approvals) S.openCount = FBX.main.approvals.open.length;
+    if (FBX.main.approvals) S.openCount = openCountOf(FBX.main.approvals);
+    if (FBX.main.swaps) S.swapIn = FBX.main.swaps.incoming.length;
     const busy = $('#sheetHost').innerHTML || ['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName);
     if (busy) { FBX.pending = true; renderTabs(); return; }
     FBX.pending = false;
@@ -508,7 +519,7 @@ let GEN = 0; // Sitzungs-Zähler: Antworten aus einer früheren Anmeldung werden
 const INVALIDATE = {
   wishCreate:['wishList','myPlan','approvals'], wishCancel:['wishList','myPlan','approvals'],
   decide:['approvals','teamPlan','myPlan','wishList'], sperrAdd:['adminPage','wishList'], sperrDelete:['adminPage','wishList'],
-  adminSetPin:['adminPage'], haccpSubmit:['haccp','haccpKader'], haccpAck:['haccpKader'], infoRead:['infos'], newsCreate:['infos'], newsHide:['infos'], newsDelete:['infos'],
+  adminSetPin:['adminPage'], haccpSubmit:['haccp','haccpKader'], swapCreate:['swaps'], swapRespond:['swaps','approvals'], swapCancel:['swaps','approvals'], swapDecide:['approvals','swaps','myPlan','teamPlan'], haccpAck:['haccpKader'], infoRead:['infos'], newsCreate:['infos'], newsHide:['infos'], newsDelete:['infos'],
 };
 const cacheKey = (action, payload) => action + '|' + JSON.stringify(payload || {});
 const cacheStoreKey = () => 'krhub_cache_' + (S.user ? S.user.name : '');
@@ -632,7 +643,7 @@ function tabList(){
 }
 function renderTabs(){
   $('#tabs').innerHTML = tabList().map(([k,l]) =>
-    `<button class="tab" role="tab" data-tab="${k}" aria-selected="${S.tab===k}">${ICONS[k]}<span>${l}</span>${k==='kader' && S.openCount ? `<span class="badge">${S.openCount}</span>`:''}${k==='info' && S.infoUnread ? `<span class="badge">${S.infoUnread}</span>`:''}</button>`).join('');
+    `<button class="tab" role="tab" data-tab="${k}" aria-selected="${S.tab===k}">${ICONS[k]}<span>${l}</span>${k==='kader' && S.openCount ? `<span class="badge">${S.openCount}</span>`:''}${k==='plan' && S.swapIn ? `<span class="badge">${S.swapIn}</span>`:''}${k==='info' && S.infoUnread ? `<span class="badge">${S.infoUnread}</span>`:''}</button>`).join('');
   $('#tabs').querySelectorAll('.tab').forEach(b => b.onclick = () => go(b.dataset.tab));
 }
 function go(tab){
@@ -645,10 +656,10 @@ function go(tab){
 async function refreshBadge(){
   const ki = CACHE.get(cacheKey('infos', {})), ka = CACHE.get(cacheKey('approvals', {}));
   if (ki) S.infoUnread = ki.data.items.filter(x => x.confirm && !x.read).length;
-  if (ka) S.openCount = ka.data.open.length;
+  if (ka) S.openCount = openCountOf(ka.data);
   renderTabs();
   try { const d = await cachedApi('infos', {}); S.infoUnread = d.items.filter(x => x.confirm && !x.read).length; } catch(e) {}
-  if (['Filialleitung','Admin'].includes(S.user.role)) { try { const d = await cachedApi('approvals', {}); S.openCount = d.open.length; } catch(e) {} }
+  if (['Filialleitung','Admin'].includes(S.user.role)) { try { const d = await cachedApi('approvals', {}); S.openCount = openCountOf(d); } catch(e) {} }
   renderTabs();
   if (S.tab === 'plan') { const b = $('#newsBanner'); if (b) planBanner(); }
 }
@@ -677,13 +688,15 @@ function bindWeekNav(onChange){
 
 /* ================================================================ Mein Plan */
 const isAway = it => !CODES.includes(it.value) && S.user.group && S.user.group !== 'Springer' && it.group !== S.user.group;
-function renderItem(it){
+function renderItem(it, date){
   const where = esc(it.group) + (it.section ? ' · ' + esc(it.section) : '');
-  if (isAway(it)) return `<div class="shift"><span class="t">${it.value.split(' ').map(esc).join('<span class="muted"> · </span>')}</span><span class="where away">📍 ${where}</span></div>`;
+  const sw = date && date > todayIso() && /\d{1,2}:\d{2}-\d{1,2}:\d{2}/.test(it.value) && !DEMO_NOSWAP ? `<button class="swbtn" data-swd="${date}" data-swg="${esc(it.group)}" data-swv="${esc(it.value)}" aria-label="Dienst am ${dmy(date)} tauschen">⇄ Tauschen</button>` : '';
+  if (isAway(it)) return `<div class="shift"><span class="t">${it.value.split(' ').map(esc).join('<span class="muted"> · </span>')}</span><span class="where away">📍 ${where}${sw}</span></div>`;
   if (CODES.includes(it.value)) return `<div class="shift"><span><span class="chip c-${it.value}">${esc(it.value)}</span></span>${it.value==='Frei'?'':`<span class="where">${where}</span>`}</div>`;
   const t = it.value.split(' ').map(esc).join('<span class="muted"> · </span>');
-  return `<div class="shift"><span class="t">${t}</span><span class="where">${where}</span></div>`;
+  return `<div class="shift"><span class="t">${t}</span><span class="where">${where}${sw}</span></div>`;
 }
+const DEMO_NOSWAP = false;
 function viewPlan(){
   const mon = S.planMon;
   return swr('myPlan', { monday: mon }, () => S.tab === 'plan' && S.planMon === mon, d => renderPlan(d, mon), 'Plan konnte nicht geladen werden.');
@@ -695,6 +708,7 @@ function renderPlan(d, mon){
   $('#view').innerHTML = `
     <div class="view-head"><h2>Mein Plan</h2><span class="muted small">${esc(S.user.stamm || '')}</span></div>
     <div id="newsBanner"></div>
+    <div id="swapBox" style="display:grid;gap:12px"></div>
     ${weekNav(mon, mon)}
     ${!d.exists ? `<div class="card"><p class="empty" style="margin:0">Für diese Woche ist noch kein Dienstplan erstellt.</p></div>` : `
     <div class="card"><div class="sum"><div><span class="label">Dienste</span><b>${n}</b></div><div><span class="label">Stunden geplant</span><b>${fmtH(hrs)}</b></div></div></div>
@@ -702,7 +716,7 @@ function renderPlan(d, mon){
       <div class="day ${x.date===t?'today':''} ${x.items.some(isAway)?'away':''}">
         <div class="d"><b>${x.day}</b><span>${dm(x.date)}</span></div>
         <div class="items">
-          ${x.items.length ? x.items.filter(it => !(it.value==='Frei' && x.items.some(o => !CODES.includes(o.value)))).map(renderItem).join('') : '<span class="empty">–</span>'}
+          ${x.items.length ? x.items.filter(it => !(it.value==='Frei' && x.items.some(o => !CODES.includes(o.value)))).map(it => renderItem(it, x.date)).join('') : '<span class="empty">–</span>'}
           ${x.wish ? `<span><span class="chip c-${x.wish}">Freiwunsch ${x.wish.toLowerCase()}</span></span>` : ''}
           ${x.notes.map(nt => `<span class="note">${esc(nt.text)}</span>`).join('')}
         </div>
@@ -710,6 +724,8 @@ function renderPlan(d, mon){
     </div>`}`;
   bindWeekNav(m => { S.planMon = m; viewPlan(); });
   planBanner();
+  document.querySelectorAll('[data-swd]').forEach(b => b.onclick = () => swapDialog(b.dataset.swd, b.dataset.swg, b.dataset.swv));
+  loadSwapBox();
 }
 
 /* ================================================================ Team */
@@ -817,8 +833,8 @@ function viewApprove(){
 }
 function renderApprove(d){
   if (!kb()) return;
-  if (S.openCount !== d.open.length) { S.openCount = d.open.length; renderTabs(); }
-  kb().innerHTML = `
+  if (S.openCount !== openCountOf(d)) { S.openCount = openCountOf(d); renderTabs(); }
+  kb().innerHTML = swapApproveHtml(d.swaps) + `
     <div class="label">${d.open.length} offene Freiwünsche</div>
     ${d.open.length ? d.open.map(w => `
       <div class="card req">
@@ -835,6 +851,7 @@ function renderApprove(d){
     ${d.done.length ? `<div class="label">Zuletzt entschieden</div><div class="card list">${d.done.map(w => `
       <div class="li"><div><b>${esc(w.name)}</b> <span class="muted small">${DAYS[wdIdx(w.date)]} ${dmy(w.date)}</span></div><span class="chip c-${w.status}">${esc(w.status)}</span>
       <div class="sub">von ${esc(w.by)}${w.plan?` · Plan: ${esc(w.plan)}`:''}${w.answer?` · «${esc(w.answer)}»`:''}</div></div>`).join('')}</div>` : ''}`;
+  bindSwapApprove();
   document.querySelectorAll('[data-yes]').forEach(b => b.onclick = () => decide(b.dataset.yes, 'Genehmigt', ''));
   document.querySelectorAll('[data-no]').forEach(b => b.onclick = () => openSheet(`<h3>Ablehnen</h3>
     <label class="f">Begründung für die Person<textarea class="in" id="noReason" maxlength="300" placeholder="z. B. Bereits zwei Personen frei"></textarea></label>
@@ -997,6 +1014,105 @@ function newsDialog(){
         closeSheet(); toast('Mitteilung veröffentlicht'); S.infoCat = 'News'; S.infoQ = ''; viewInfo(); }
       catch(e){ $('#nSend').disabled = false; }
     }; });
+}
+
+/* ================================================================ Diensttausch */
+const swDay = d => `${DAYS[wdIdx(d)]} ${dm(d)}`;
+const swVal = v => esc(v).replace(' ', ' · ');
+const openCountOf = d => (d.open || []).length + (d.swaps || []).length;
+async function loadSwapBox(){
+  const draw = d => {
+    S.swapData = d; const b = $('#swapBox'); if (!b) return;
+    const n = d.incoming.length; if (S.swapIn !== n) { S.swapIn = n; renderTabs(); }
+    const card = x => {
+      const stat = { Angefragt: x.dir === 'out' ? `Wartet auf ${esc(x.other)}` : 'Deine Antwort fehlt', Zugestimmt: 'Wartet auf Filialleitung', Genehmigt: '✓ Genehmigt – im Plan getauscht', Abgelehnt: 'Abgelehnt', Ungültig: 'Nicht mehr möglich', Abgelaufen: 'Abgelaufen', Zurückgezogen: 'Zurückgezogen' }[x.status] || x.status;
+      return `<div class="card swap ${x.status==='Angefragt' && x.dir==='in' ? 'swap-in' : ''}">
+        <div class="row" style="justify-content:space-between"><b>⇄ ${x.dir === 'in' ? esc(x.other) + ' möchte tauschen' : 'Tausch mit ' + esc(x.other)}</b><span class="small muted">${esc(x.group)}</span></div>
+        <div class="swap-grid"><span class="muted small">Du gibst</span><span><b>${swDay(x.give.date)}</b> ${swVal(x.give.value)}</span>
+          <span class="muted small">Du bekommst</span><span><b>${swDay(x.get.date)}</b> ${swVal(x.get.value)}</span></div>
+        ${x.msg ? `<div class="small">«${esc(x.msg)}»</div>` : ''}
+        <div class="small ${['Abgelehnt','Ungültig','Abgelaufen'].includes(x.status) ? 'hc-err' : 'muted'}">${stat}${x.answer ? ' – ' + esc(x.answer) : ''}</div>
+        ${x.dir === 'in' && x.status === 'Angefragt' ? `<div class="row"><button class="btn danger grow" data-swno="${esc(x.id)}">Ablehnen</button><button class="btn kr grow" data-swyes="${esc(x.id)}">Annehmen</button></div>` : ''}
+        ${x.dir === 'out' && ['Angefragt','Zugestimmt'].includes(x.status) ? `<button class="btn ghost sm" style="justify-self:start" data-swcancel="${esc(x.id)}">Zurückziehen</button>` : ''}
+      </div>`;
+    };
+    const list = d.incoming.concat(d.open);
+    const recent = d.done.filter(x => x.created && (Date.now() - new Date(x.created)) < 7 * 864e5).slice(0, 3);
+    b.innerHTML = list.length || recent.length ? `<div class="label">Diensttausch</div>${list.map(card).join('')}${recent.map(card).join('')}` : '';
+    b.querySelectorAll('[data-swyes]').forEach(x => x.onclick = () => swapRespond(x.dataset.swyes, true));
+    b.querySelectorAll('[data-swno]').forEach(x => x.onclick = () => swapRespond(x.dataset.swno, false));
+    b.querySelectorAll('[data-swcancel]').forEach(x => x.onclick = async () => { x.disabled = true; try { await call('swapCancel', { id: x.dataset.swcancel }); toast('Anfrage zurückgezogen'); loadSwapBox(); } catch(e) { x.disabled = false; } });
+  };
+  const k = CACHE.get(cacheKey('swaps', {})); if (k) draw(JSON.parse(k.json));
+  try { const d = await getData('swaps'); putCache(cacheKey('swaps', {}), d); draw(d); } catch(e) {}
+}
+async function swapRespond(id, accept){
+  try { await call('swapRespond', { id, accept }); toast(accept ? 'Angenommen – jetzt entscheidet die Filialleitung' : 'Abgelehnt', 4500); loadSwapBox(); } catch(e) {}
+}
+/* Dialog: Gegendienst wählen */
+async function swapDialog(date, group, value){
+  openSheet(`<h3>Dienst tauschen</h3><p class="small muted" style="margin:0">${swDay(date)} · ${swVal(value)} · ${esc(group)}</p><div class="spinner" aria-label="Lädt"></div>`);
+  let o;
+  try { o = await api('swapOptions', { date, group }); }
+  catch(e) { if (e.auth) return logout(true); return openSheet(`<h3>Dienst tauschen</h3><p style="margin:0">${esc(e.message)}</p><button class="btn ghost" data-close>Schliessen</button>`); }
+  const ok = o.people.map(p => ({ name: p.name, shifts: p.shifts.filter(s => s.ok) })).filter(p => p.shifts.length);
+  const no = o.people.map(p => ({ name: p.name, shifts: p.shifts.filter(s => !s.ok) })).filter(p => p.shifts.length);
+  openSheet(`<h3>Dienst tauschen</h3>
+    <div class="card" style="gap:4px"><span class="label">Du gibst</span><b>${swDay(o.mine.date)} · ${swVal(o.mine.value)}</b><span class="small muted">${fmtH(o.mine.hours)} Std. · ${esc(o.mine.group)}</span></div>
+    <p class="small muted" style="margin:0">Wähle den Dienst, den du dafür übernimmst. Möglich sind Dienste derselben Filiale in dieser, der vorherigen oder der nächsten Woche, mit höchstens ±${fmtH(o.tol)} Std. Unterschied.</p>
+    ${ok.length ? ok.map(p => `<div class="label">${esc(p.name)}</div><div class="swap-opts">${p.shifts.map(s => `<button class="swap-opt" data-sp='${esc(JSON.stringify({ to: p.name, toDate: s.date, toValue: s.value, warn: s.warn }))}'>
+        <b>${swDay(s.date)}</b><span>${swVal(s.value)}</span><small>${fmtH(s.hours)} Std.${s.section ? ' · ' + esc(s.section) : ''}${s.warn ? ' · ⚠ ' + esc(s.warn) : ''}</small></button>`).join('')}</div>`).join('')
+      : '<div class="card"><p class="empty" style="margin:0">Im Moment ist kein passender Tausch möglich.</p></div>'}
+    ${no.length ? `<details class="small"><summary class="muted">Nicht möglich (${no.reduce((a, p) => a + p.shifts.length, 0)})</summary>${no.map(p => p.shifts.map(s => `<div class="muted" style="padding:4px 0">${esc(p.name)} · ${swDay(s.date)} ${swVal(s.value)} – ${esc(s.why)}</div>`).join('')).join('')}</details>` : ''}
+    <button class="btn ghost" data-close>Abbrechen</button>`,
+    () => document.querySelectorAll('[data-sp]').forEach(b => b.onclick = () => {
+      const c = JSON.parse(b.dataset.sp);
+      openSheet(`<h3>Tausch anfragen</h3>
+        <div class="card swap-grid"><span class="muted small">Du gibst</span><span><b>${swDay(o.mine.date)}</b> ${swVal(o.mine.value)}</span>
+          <span class="muted small">Du bekommst</span><span><b>${swDay(c.toDate)}</b> ${swVal(c.toValue)}</span>
+          <span class="muted small">Mit</span><span><b>${esc(c.to)}</b></span></div>
+        ${c.warn ? `<div class="warn small">⚠ ${esc(c.warn)}</div>` : ''}
+        <label class="f">Nachricht an ${esc(c.to)} (optional)<textarea class="in" id="swMsg" maxlength="300" placeholder="z. B. Ich habe einen Arzttermin"></textarea></label>
+        <p class="small muted" style="margin:0">${esc(c.to)} muss zustimmen, danach genehmigt die Filialleitung. Erst dann wird im Plan getauscht.</p>
+        <div class="row"><button class="btn ghost grow" id="swBack">Zurück</button><button class="btn kr grow" id="swSend">Anfrage senden</button></div>`,
+        () => {
+          $('#swBack').onclick = () => swapDialog(date, group, value);
+          $('#swSend').onclick = async () => {
+            $('#swSend').disabled = true;
+            try { await call('swapCreate', { date, group, to: c.to, toDate: c.toDate, toValue: c.toValue, msg: $('#swMsg').value });
+              closeSheet(); toast('Anfrage an ' + c.to + ' gesendet', 4000); loadSwapBox(); }
+            catch(e) { $('#swSend').disabled = false; }
+          };
+        });
+    }));
+}
+/* Kader: Tausch genehmigen */
+function swapApproveHtml(list){
+  if (!list || !list.length) return '';
+  const pers = p => `<div class="swap-p"><b>${esc(p.name)}</b> gibt ${swDay(p.give.date)} · ${swVal(p.give.value)} <span class="muted">(${fmtH(p.give.hours)} Std.)</span>
+    <div class="small muted">${p.weeks.map(w => `${weekLabel(w.monday).kw}: ${fmtH(w.before)} → <b style="color:var(--ink)">${fmtH(w.after)}</b> Std.`).join(' · ')}${p.soll ? ` · Soll ${fmtH(p.soll)}` : ' · Stundenlohn'}</div>
+    ${p.month.count ? `<div class="small muted">Diesen Monat: ${p.month.count} Tausch${p.month.count > 1 ? 'e' : ''}, Bilanz ${p.month.hours > 0 ? '+' : ''}${fmtH(p.month.hours)} Std.</div>` : ''}
+    ${p.month.count >= 3 ? `<div class="warn small">⚠ ${esc(p.name)} tauscht diesen Monat auffällig oft</div>` : ''}
+    ${p.freiwunsch ? `<div class="warn small">⚠ ${esc(p.name)} hat am übernommenen Tag einen genehmigten Freiwunsch</div>` : ''}</div>`;
+  return `<div class="label">${list.length} Diensttausch${list.length > 1 ? 'e' : ''} zu genehmigen</div>` + list.map(x => `
+    <div class="card req">
+      <div class="row" style="justify-content:space-between"><b>⇄ ${esc(x.a.name)} ↔ ${esc(x.b.name)}</b><span class="small muted">${esc(x.group)}</span></div>
+      ${pers(x.a)}${pers(x.b)}
+      ${x.msg ? `<div class="small">«${esc(x.msg)}»</div>` : ''}
+      <div class="small ok">✓ Beide sind einverstanden · Stunden ausgeglichen · keine Überschneidung</div>
+      <div class="row"><button class="btn danger grow" data-swdno="${esc(x.id)}">Ablehnen</button><button class="btn kr grow" data-swdyes="${esc(x.id)}">Genehmigen</button></div>
+    </div>`).join('');
+}
+function bindSwapApprove(){
+  document.querySelectorAll('[data-swdyes]').forEach(b => b.onclick = async () => {
+    b.disabled = true;
+    try { await call('swapDecide', { id: b.dataset.swdyes, decision: 'Genehmigt' }); toast('Genehmigt – Dienste im Plan getauscht', 4500); viewApprove(); }
+    catch(e) { b.disabled = false; viewApprove(); }
+  });
+  document.querySelectorAll('[data-swdno]').forEach(b => b.onclick = () => openSheet(`<h3>Tausch ablehnen</h3>
+    <label class="f">Begründung<textarea class="in" id="swNo" maxlength="300" placeholder="z. B. Am Mittwoch brauche ich eine erfahrene Person"></textarea></label>
+    <div class="row"><button class="btn ghost grow" data-close>Abbrechen</button><button class="btn danger grow" id="swNoGo">Ablehnen</button></div>`,
+    () => { $('#swNoGo').onclick = async () => { const r = $('#swNo').value; closeSheet(); try { await call('swapDecide', { id: b.dataset.swdno, decision: 'Abgelehnt', answer: r }); toast('Abgelehnt'); viewApprove(); } catch(e) {} }; }));
 }
 
 /* ================================================================ HACCP */
@@ -1348,6 +1464,54 @@ function demoPublic(u){
   return { name:u.name, role:u.role, stamm:u.stamm, bereich:u.bereich||'', group:u.group, groups, approves };
 }
 const DEMO_HC = [{"id": "D0", "st": "Shoppyland", "g": "Shoppyland", "teil": "Temperaturen", "p": "Gemüse Frigor", "art": "Temperatur", "min": null, "max": 5, "opt": ""}, {"id": "D1", "st": "Shoppyland", "g": "Shoppyland", "teil": "Temperaturen", "p": "Saladette Gross", "art": "Temperatur", "min": null, "max": 5, "opt": ""}, {"id": "D2", "st": "Shoppyland", "g": "Shoppyland", "teil": "Temperaturen", "p": "Saladette Klein", "art": "Temperatur", "min": null, "max": 5, "opt": ""}, {"id": "D3", "st": "Shoppyland", "g": "Shoppyland", "teil": "Temperaturen", "p": "Frigor 1", "art": "Temperatur", "min": null, "max": 5, "opt": ""}, {"id": "D4", "st": "Shoppyland", "g": "Shoppyland", "teil": "Temperaturen", "p": "Frigor 2", "art": "Temperatur", "min": null, "max": 5, "opt": ""}, {"id": "D5", "st": "Shoppyland", "g": "Shoppyland", "teil": "Temperaturen", "p": "Frigor 3", "art": "Temperatur", "min": null, "max": 5, "opt": ""}, {"id": "D6", "st": "Shoppyland", "g": "Shoppyland", "teil": "Temperaturen", "p": "Frigor 4", "art": "Temperatur", "min": null, "max": 5, "opt": ""}, {"id": "D7", "st": "Shoppyland", "g": "Shoppyland", "teil": "Temperaturen", "p": "Frigor 6", "art": "Temperatur", "min": null, "max": 5, "opt": ""}, {"id": "D8", "st": "Shoppyland", "g": "Shoppyland", "teil": "Temperaturen", "p": "Getränkekühlschrank Coca Cola", "art": "Temperatur", "min": null, "max": 5, "opt": ""}, {"id": "D9", "st": "Shoppyland", "g": "Shoppyland", "teil": "Temperaturen", "p": "Bubbletea Kühlschrank", "art": "Temperatur", "min": null, "max": 5, "opt": ""}, {"id": "D10", "st": "Shoppyland", "g": "Shoppyland", "teil": "Temperaturen", "p": "Tiefkühler Küche", "art": "Temperatur", "min": null, "max": -18, "opt": ""}, {"id": "D11", "st": "Shoppyland", "g": "Shoppyland", "teil": "Temperaturen", "p": "Kühlschrank Untergeschoss", "art": "Temperatur", "min": null, "max": 5, "opt": ""}, {"id": "D12", "st": "Shoppyland", "g": "Shoppyland", "teil": "Temperaturen", "p": "Tiefkühler Untergeschoss", "art": "Temperatur", "min": null, "max": -18, "opt": ""}, {"id": "D13", "st": "Shoppyland", "g": "Shoppyland", "teil": "Erhitzen", "p": "Poulet", "art": "Erhitzen", "min": 72, "max": null, "opt": ""}, {"id": "D14", "st": "Shoppyland", "g": "Shoppyland", "teil": "Erhitzen", "p": "Ente", "art": "Erhitzen", "min": 72, "max": null, "opt": ""}, {"id": "D15", "st": "Shoppyland", "g": "Shoppyland", "teil": "Erhitzen", "p": "Rindfleisch (Thai Basil Beef)", "art": "Erhitzen", "min": 72, "max": null, "opt": ""}, {"id": "D16", "st": "Shoppyland", "g": "Shoppyland", "teil": "Erhitzen", "p": "Crevetten", "art": "Erhitzen", "min": 72, "max": null, "opt": ""}, {"id": "D17", "st": "Shoppyland", "g": "Shoppyland", "teil": "Erhitzen", "p": "Reis", "art": "Erhitzen", "min": 72, "max": null, "opt": ""}, {"id": "D18", "st": "Shoppyland", "g": "Shoppyland", "teil": "Erhitzen", "p": "Pork Belly", "art": "Erhitzen", "min": 72, "max": null, "opt": ""}, {"id": "D19", "st": "Shoppyland", "g": "Shoppyland", "teil": "Abkühlen", "p": "Reis", "art": "Abkühlen", "min": null, "max": 5, "opt": "90"}, {"id": "D20", "st": "Shoppyland", "g": "Shoppyland", "teil": "Auftauen", "p": "Korrekt aufgetaut (0–5 °C im Frigor oder im Wasserbad)", "art": "Prüfung", "min": null, "max": null, "opt": ""}, {"id": "D21", "st": "Shoppyland", "g": "Shoppyland", "teil": "Datierung & Deklaration", "p": "Fleischprodukte TK", "art": "Prüfung", "min": null, "max": null, "opt": ""}, {"id": "D22", "st": "Shoppyland", "g": "Shoppyland", "teil": "Datierung & Deklaration", "p": "Meeresfrüchte TK", "art": "Prüfung", "min": null, "max": null, "opt": ""}, {"id": "D23", "st": "Shoppyland", "g": "Shoppyland", "teil": "Datierung & Deklaration", "p": "Molkereiprodukte", "art": "Prüfung", "min": null, "max": null, "opt": ""}, {"id": "D24", "st": "Shoppyland", "g": "Shoppyland", "teil": "Datierung & Deklaration", "p": "Gemüse Frisch", "art": "Prüfung", "min": null, "max": null, "opt": ""}, {"id": "D25", "st": "Shoppyland", "g": "Shoppyland", "teil": "Datierung & Deklaration", "p": "Gemüse TK", "art": "Prüfung", "min": null, "max": null, "opt": ""}, {"id": "D26", "st": "Shoppyland", "g": "Shoppyland", "teil": "Datierung & Deklaration", "p": "Convenience Produkte", "art": "Prüfung", "min": null, "max": null, "opt": ""}, {"id": "D27", "st": "Shoppyland", "g": "Shoppyland", "teil": "Datierung & Deklaration", "p": "Bubbletea und PET Getränke", "art": "Prüfung", "min": null, "max": null, "opt": ""}, {"id": "D28", "st": "Shoppyland", "g": "Shoppyland", "teil": "Reinigung", "p": "Abstellflächen und Arbeitstische", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D29", "st": "Shoppyland", "g": "Shoppyland", "teil": "Reinigung", "p": "Arbeitswerkzeuge", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D30", "st": "Shoppyland", "g": "Shoppyland", "teil": "Reinigung", "p": "Blendtec Maschine (Mixer)", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D31", "st": "Shoppyland", "g": "Shoppyland", "teil": "Reinigung", "p": "Böden", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D32", "st": "Shoppyland", "g": "Shoppyland", "teil": "Reinigung", "p": "Geschirrwaschmaschine (Auch schlecht einsehbare Ecken und Kanten!)", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D33", "st": "Shoppyland", "g": "Shoppyland", "teil": "Reinigung", "p": "Holdomat (auch innen gereinigt!)", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D34", "st": "Shoppyland", "g": "Shoppyland", "teil": "Reinigung", "p": "Alto Shaam (auch innen gereinigt!)", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D35", "st": "Shoppyland", "g": "Shoppyland", "teil": "Reinigung", "p": "Kühl- und Tiefkühlschränke (innen, Griffe, Scheiben)", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D36", "st": "Shoppyland", "g": "Shoppyland", "teil": "Reinigung", "p": "Induktionsherd und Wok Stationen", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D37", "st": "Shoppyland", "g": "Shoppyland", "teil": "Reinigung", "p": "Gestelle Lager UG", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D38", "st": "Shoppyland", "g": "Shoppyland", "teil": "Reinigung", "p": "Lüftungen (Kochbereich und über dem Steamer)", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D39", "st": "Shoppyland", "g": "Shoppyland", "teil": "Reinigung", "p": "Steamer (innen, Griffe, Scheibe, Unterbau)", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D40", "st": "Shoppyland", "g": "Shoppyland", "teil": "Reinigung", "p": "Pfannen und Woks", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D41", "st": "Shoppyland", "g": "Shoppyland", "teil": "Reinigung", "p": "Saladette", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D42", "st": "Shoppyland", "g": "Shoppyland", "teil": "Reinigung", "p": "Schneidebretter", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D43", "st": "Shoppyland", "g": "Shoppyland", "teil": "Reinigung", "p": "Spültröge", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D44", "st": "Shoppyland", "g": "Shoppyland", "teil": "Reinigung", "p": "Wände", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D45", "st": "Shoppyland", "g": "Shoppyland", "teil": "Reinigung", "p": "Warmhalte Vitrine", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D46", "st": "Shoppyland", "g": "Shoppyland", "teil": "Reinigung", "p": "Koch Geschirr (wurden die Rückstände von Datumsetiketten entfernt?)", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D47", "st": "Shoppyland", "g": "Shoppyland", "teil": "Reinigung", "p": "Saladetten", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D48", "st": "Shoppyland", "g": "Shoppyland", "teil": "Wareneingang", "p": "Wareneingang", "art": "Wareneingang", "min": null, "max": null, "opt": "Mundo Ag, Locher Food (Dosen Bubbletea), Saviva Foodservices, Bubble Brothers, The Flavour Kitchen, George Weiss"}, {"id": "D49", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Temperaturen", "p": "Getränkemulde", "art": "Temperatur", "min": null, "max": 5, "opt": ""}, {"id": "D50", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Temperaturen", "p": "KS 1", "art": "Temperatur", "min": null, "max": 5, "opt": ""}, {"id": "D51", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Temperaturen", "p": "KS 2", "art": "Temperatur", "min": null, "max": 5, "opt": ""}, {"id": "D52", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Temperaturen", "p": "KS 3", "art": "Temperatur", "min": null, "max": 5, "opt": ""}, {"id": "D53", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Temperaturen", "p": "KS 4", "art": "Temperatur", "min": null, "max": 5, "opt": ""}, {"id": "D54", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Temperaturen", "p": "Getränkefrigor", "art": "Temperatur", "min": null, "max": 5, "opt": ""}, {"id": "D55", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Temperaturen", "p": "KS 5", "art": "Temperatur", "min": null, "max": 5, "opt": ""}, {"id": "D56", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Temperaturen", "p": "Saladette klein", "art": "Temperatur", "min": null, "max": 5, "opt": ""}, {"id": "D57", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Temperaturen", "p": "Saladette gross", "art": "Temperatur", "min": null, "max": 5, "opt": ""}, {"id": "D58", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Erhitzen", "p": "Poulet", "art": "Erhitzen", "min": 72, "max": null, "opt": ""}, {"id": "D59", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Erhitzen", "p": "Ente", "art": "Erhitzen", "min": 72, "max": null, "opt": ""}, {"id": "D60", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Erhitzen", "p": "Thai Basil Beef", "art": "Erhitzen", "min": 72, "max": null, "opt": ""}, {"id": "D61", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Erhitzen", "p": "Crevetten", "art": "Erhitzen", "min": 72, "max": null, "opt": ""}, {"id": "D62", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Erhitzen", "p": "Reis", "art": "Erhitzen", "min": 72, "max": null, "opt": ""}, {"id": "D63", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Erhitzen", "p": "Pork Belly", "art": "Erhitzen", "min": 72, "max": null, "opt": ""}, {"id": "D64", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Abkühlen", "p": "Poulet", "art": "Abkühlen", "min": null, "max": 5, "opt": "90"}, {"id": "D65", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Abkühlen", "p": "Ente", "art": "Abkühlen", "min": null, "max": 5, "opt": "90"}, {"id": "D66", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Abkühlen", "p": "Crevetten", "art": "Abkühlen", "min": null, "max": 5, "opt": "90"}, {"id": "D67", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Abkühlen", "p": "Reis", "art": "Abkühlen", "min": null, "max": 5, "opt": "90"}, {"id": "D68", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Auftauen", "p": "Korrekt aufgetaut (0–5 °C im Frigor oder im Wasserbad)", "art": "Prüfung", "min": null, "max": null, "opt": ""}, {"id": "D69", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Datierung & Deklaration", "p": "Fleischprodukte TK", "art": "Prüfung", "min": null, "max": null, "opt": ""}, {"id": "D70", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Datierung & Deklaration", "p": "Meeresfrüchte TK", "art": "Prüfung", "min": null, "max": null, "opt": ""}, {"id": "D71", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Datierung & Deklaration", "p": "Molkereiprodukte", "art": "Prüfung", "min": null, "max": null, "opt": ""}, {"id": "D72", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Datierung & Deklaration", "p": "Gemüse Frisch", "art": "Prüfung", "min": null, "max": null, "opt": ""}, {"id": "D73", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Datierung & Deklaration", "p": "Gemüse TK", "art": "Prüfung", "min": null, "max": null, "opt": ""}, {"id": "D74", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Datierung & Deklaration", "p": "Convenience Produkte", "art": "Prüfung", "min": null, "max": null, "opt": ""}, {"id": "D75", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Datierung & Deklaration", "p": "Bubbletea und PET Getränke", "art": "Prüfung", "min": null, "max": null, "opt": ""}, {"id": "D76", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Reinigung", "p": "Abstellflächen und Arbeitstische", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D77", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Reinigung", "p": "Arbeitswerkzeuge", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D78", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Reinigung", "p": "Blendtec Maschine (Mixer)", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D79", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Reinigung", "p": "Böden", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D80", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Reinigung", "p": "Gläserwaschmaschine", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D81", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Reinigung", "p": "Geschirrwaschmaschine (Auch schlecht einsehbare Ecken und Kanten!)", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D82", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Reinigung", "p": "Holdomat (auch innen gereinigt!)", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D83", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Reinigung", "p": "Alto Shaam (auch innen gereinigt!)", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D84", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Reinigung", "p": "Kühl- und Tiefkühlschränke (innen, Griffe, Scheiben)", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D85", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Reinigung", "p": "Induktionsherd und Wok Stationen", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D86", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Reinigung", "p": "Gestelle Lager UG", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D87", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Reinigung", "p": "Lüftungen (Kochbereich und über dem Steamer)", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D88", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Reinigung", "p": "Steamer (innen, Griffe, Scheibe, Unterbau)", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D89", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Reinigung", "p": "Pfannen und Woks", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D90", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Reinigung", "p": "Schneidebretter", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D91", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Reinigung", "p": "Spültröge", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D92", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Reinigung", "p": "Wände", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D93", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Reinigung", "p": "Warmhalte Vitrine", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D94", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Reinigung", "p": "Koch Geschirr (wurden die Rückstände von Datumsetiketten entfernt?)", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D95", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Reinigung", "p": "Bain Marie's", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D96", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Reinigung", "p": "Geschirrwaschmaschinen (Auch schlecht einsehbare Ecken und Kanten!)", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D97", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Reinigung", "p": "Gestelle Lager", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D98", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Reinigung", "p": "Lüftungen", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D99", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Reinigung", "p": "Reiskocher", "art": "Reinigung", "min": null, "max": null, "opt": ""}, {"id": "D100", "st": "Tivoli Thai", "g": "Shoppi Tivoli", "teil": "Wareneingang", "p": "Wareneingang", "art": "Wareneingang", "min": null, "max": null, "opt": "Mundo Ag, Saviva Foodservices, George Weiss, The Flavour Kitchen"}];
+/* ---------- Demo: Diensttausch (vereinfacht) */
+const dIv = v => { const out = []; const re = /(\d{1,2}):(\d{2})-(\d{1,2}):(\d{2})/g; let m; while ((m = re.exec(v))) { const a = +m[1]*60 + +m[2]; let b = +m[3]*60 + +m[4]; if (b <= a) b += 1440; out.push([a,b]); } return out; };
+const dRow = (bl, g, n) => { const b = (bl||[]).find(x => x.group === g); if (!b) return null; for (const s of b.sections) for (const r of s.rows) if (r.name === n) return r; return null; };
+function demoSwapApprovals(P){
+  DB.swaps = DB.swaps || [];
+  return DB.swaps.filter(x => x.status === 'Zugestimmt' && P.approves.includes(x.group)).map(x => {
+    const pp = (n, gd, gv) => ({ name:n, soll: n === 'Dean' ? 42 : null, weeks:[{ monday: isoOf(mondayOf(parseIso(gd))), before: 40, after: 40 }], month:{ count:0, hours:0 }, freiwunsch:false, give:{ date:gd, value:gv, hours: shiftHours(gv) } });
+    return { id:x.id, group:x.group, msg:x.msg, a: pp(x.a, x.dateA, x.valA), b: pp(x.b, x.dateB, x.valB) };
+  });
+}
+function demoSwap(req, u, P, blocksOf, fail){
+  DB.swaps = DB.swaps || [];
+  const tol = 1, me = u.name;
+  if (req.action === 'swaps') {
+    const v = x => { const out = x.a === me; return { id:x.id, dir: out?'out':'in', other: out?x.b:x.a, group:x.group, give: out?{date:x.dateA,value:x.valA}:{date:x.dateB,value:x.valB}, get: out?{date:x.dateB,value:x.valB}:{date:x.dateA,value:x.valA}, msg:x.msg, status:x.status, answer:x.answer||'', created:x.created }; };
+    const it = DB.swaps.filter(x => x.a === me || x.b === me).map(v);
+    return { ok:true, data:{ incoming: it.filter(x => x.dir==='in' && x.status==='Angefragt'), open: it.filter(x => !(x.dir==='in' && x.status==='Angefragt') && ['Angefragt','Zugestimmt'].includes(x.status)), done: it.filter(x => !['Angefragt','Zugestimmt'].includes(x.status)) } };
+  }
+  if (req.action === 'swapOptions' || req.action === 'swapCreate') {
+    const monA = isoOf(mondayOf(parseIso(req.date))), dA = wdIdx(req.date), rA = dRow(blocksOf(monA), req.group, me);
+    const valA = rA ? rA.days[dA] : ''; if (!dIv(valA).length) return fail('An diesem Tag hast du keinen Dienst.');
+    const hA = shiftHours(valA), people = {};
+    [-7,0,7].forEach(off => { const monB = isoOf(addDays(parseIso(monA), off)), bl = blocksOf(monB); const b = (bl||[]).find(x => x.group === req.group); if (!b) return;
+      b.sections.forEach(s => s.rows.forEach(r => { if (r.name === me) return; r.days.forEach((v, j) => { if (!dIv(v).length) return; const dB = isoOf(addDays(parseIso(monB), j)); if (dB <= todayIso()) return;
+        const hB = shiftHours(v); let why = Math.abs(hA - hB) > tol ? `Stunden nicht ausgeglichen (${fmtH(hB)} statt ${fmtH(hA)} Std.)` : '';
+        if (!why) { const same = monB === monA && j === dA; const rB = dRow(blocksOf(monA), req.group, r.name); const cur = rB ? rB.days[dA] : null;
+          if (!rB) why = r.name + ' steht nicht im Plan dieser Woche'; else if (cur && cur !== 'Frei' && !same) why = r.name + ' hat an diesem Tag bereits «' + cur + '»';
+          else { const rA2 = dRow(bl, req.group, me); const c2 = rA2 ? rA2.days[j] : null; if (!rA2) why = 'Du stehst nicht im Plan dieser Woche'; else if (c2 && c2 !== 'Frei' && !same) why = 'Du hast an diesem Tag bereits «' + c2 + '»'; } }
+        (people[r.name] = people[r.name] || []).push({ date:dB, value:v, hours:hB, section:s.label, ok:!why, why, warn:'' }); }); })); });
+    const opts = { mine:{ date:req.date, value:valA, hours:hA, group:req.group, section:'' }, tol, frist:24, people: Object.keys(people).sort().map(n => ({ name:n, shifts:people[n] })) };
+    if (req.action === 'swapOptions') return { ok:true, data:opts };
+    const p = opts.people.find(x => x.name === req.to), sh = p && p.shifts.find(x => x.date === req.toDate && x.value === req.toValue);
+    if (!sh || !sh.ok) return fail(sh ? sh.why : 'Nicht möglich.');
+    const id = 'T' + Date.now(); DB.swaps.push({ id, created:new Date().toISOString(), a:me, b:req.to, group:req.group, dateA:req.date, valA, dateB:req.toDate, valB:req.toValue, msg:req.msg||'', status:'Angefragt' });
+    return { ok:true, data:{ id } };
+  }
+  const x = DB.swaps.find(s => s.id === req.id); if (!x) return fail('Nicht gefunden.');
+  if (req.action === 'swapRespond') { x.status = req.accept ? 'Zugestimmt' : 'Abgelehnt'; return { ok:true, data:true }; }
+  if (req.action === 'swapCancel') { x.status = 'Zurückgezogen'; return { ok:true, data:true }; }
+  if (req.action === 'swapDecide') {
+    if (req.decision === 'Genehmigt') {
+      const ra = dRow(blocksOf(isoOf(mondayOf(parseIso(x.dateA)))), x.group, x.a), rb = dRow(blocksOf(isoOf(mondayOf(parseIso(x.dateB)))), x.group, x.b);
+      const ta = dRow(blocksOf(isoOf(mondayOf(parseIso(x.dateB)))), x.group, x.a), tb = dRow(blocksOf(isoOf(mondayOf(parseIso(x.dateA)))), x.group, x.b);
+      ra.days[wdIdx(x.dateA)] = ''; rb.days[wdIdx(x.dateB)] = ''; tb.days[wdIdx(x.dateA)] = x.valA; ta.days[wdIdx(x.dateB)] = x.valB;
+    }
+    x.status = req.decision; x.answer = req.answer || ''; return { ok:true, data:{ status:x.status } };
+  }
+}
 async function demoApi(req){
   await new Promise(r => setTimeout(r, 180));
   if (!DB) demoInit();
@@ -1403,8 +1567,9 @@ async function demoApi(req){
           (bl||[]).forEach(b => b.sections.forEach(s => s.rows.forEach(r => { if (r.name===w.name && r.days[i] && r.days[i]!=='Frei') planned.push(r.days[i] + ' · ' + b.group + (s.label?' '+s.label:'')); })));
           return Object.assign({}, w, { planned, weekExists:!!bl, sameDay: DB.wishes.filter(x => x.id!==w.id && x.date===w.date && x.group===w.group && ['Offen','Genehmigt'].includes(x.status)).map(x => x.name+' ('+x.status+')') });
         }).sort((a,b) => a.date < b.date ? -1 : 1);
-        return { ok:true, data:{ open, done: mine.filter(w => ['Genehmigt','Abgelehnt'].includes(w.status)) } };
+        return { ok:true, data:{ open, done: mine.filter(w => ['Genehmigt','Abgelehnt'].includes(w.status)), swaps: demoSwapApprovals(P) } };
       }
+      case 'swaps': case 'swapOptions': case 'swapCreate': case 'swapRespond': case 'swapCancel': case 'swapDecide': return demoSwap(req, u, P, blocksOf, fail);
       case 'decide': {
         const w = DB.wishes.find(x => x.id===req.id); if (!w || w.status!=='Offen') return fail('Nicht möglich.');
         let plan = '';
