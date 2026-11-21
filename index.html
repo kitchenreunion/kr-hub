@@ -195,6 +195,23 @@ table.grid{border-collapse:separate;border-spacing:0;font-size:13px;width:100%}
 .info-text ul{margin:0 0 6px;padding-left:20px}
 .info-text a{color:var(--kr-deep);font-weight:700;word-break:break-word}
 .info-card.imp{border-color:var(--kr);box-shadow:inset 4px 0 var(--kr)}
+/* rezepte */
+.rez-list{padding:0;gap:0;overflow:hidden}
+.rez-row{display:flex;align-items:center;gap:10px;width:100%;text-align:left;background:none;border:0;border-top:1px solid var(--line);padding:13px 16px;cursor:pointer;color:inherit;font:inherit}
+.rez-row:first-child{border-top:0}
+.rez-row .t{flex:1;min-width:0;display:grid;gap:2px}
+.rez-row b{font-size:16px}
+.rez-row small{color:var(--muted);font-size:13px}
+.rez-row .go{color:var(--muted);font-size:20px}
+.rez-row:active{background:var(--kr-soft)}
+.rez-tab{width:100%;border-collapse:collapse;font-size:15px}
+.rez-tab td{padding:9px 0;border-top:1px solid var(--line);vertical-align:top}
+.rez-tab tr:first-child td{border-top:0}
+.rez-tab td.q{text-align:right;white-space:nowrap;font-weight:700;padding-left:12px;font-variant-numeric:tabular-nums}
+.rez-tab .note{display:block;color:var(--muted);font-size:13px}
+.rez-link{background:none;border:0;padding:0;font:inherit;color:var(--kr-deep);font-weight:700;text-align:left;cursor:pointer;text-decoration:underline;text-underline-offset:3px}
+.rez-steps{margin:0;padding-left:22px;display:grid;gap:10px;font-size:15px;line-height:1.5}
+.rez-steps li::marker{font-weight:700;color:var(--kr-deep)}
 .info-card.unread{border-color:var(--amber);box-shadow:inset 4px 0 var(--amber)}
 details.info-card summary{list-style:none;cursor:pointer;display:flex;justify-content:space-between;gap:12px;align-items:center;font-weight:700;font-size:17px}
 details.info-card summary::-webkit-details-marker{display:none}
@@ -345,7 +362,7 @@ body.padopen #view{padding-bottom:360px}
 <script>
 /* ================================================================ Konfiguration
    API_URL = URL der Apps-Script-Web-App (endet auf /exec). Leer = Demo-Modus. */
-const APP_VERSION = '20.11.2026 · 21:00';
+const APP_VERSION = '21.11.2026 · 02:30';
 const API_URL = 'https://script.google.com/macros/s/AKfycbzmwPd2iu_6EQ5Ytwi1QRcD2S6HFpnUEqdXm3stLC_Xf9ddpH1LlG1y3vHgUvnq5_Lh/exec';
 const SPLASH_T0 = Date.now();
 function hideSplash(){
@@ -492,6 +509,7 @@ function fbGet(action, p){
     case 'swaps': return M.swaps;
     case 'pubStatus': return M.pub;
     case 'haccpKader': return M.haccpKader;
+    case 'rezepte': return FBX.weeks.rez;
     case 'adminPage': return M.sperrList && M.adminUsers ? { sp: M.sperrList, us: M.adminUsers } : undefined;
     case 'myPlan': { const w = FBX.weeks[p.monday]; return w ? w.my : undefined; }
     case 'teamPlan': {
@@ -603,7 +621,7 @@ async function call(action, payload, opts={}){
 }
 
 /* ================================================================ State */
-const S = { user:null, settings:{}, tab:'plan', weeks:[], planMon:null, teamMon:null, teamGroup:null, calMonth:null, openCount:0, infoUnread:0, infoCat:'News', infoQ:'', kaderSub:'ok', showArchive:false };
+const S = { user:null, settings:{}, tab:'plan', weeks:[], planMon:null, teamMon:null, teamGroup:null, calMonth:null, openCount:0, infoUnread:0, infoCat:'News', infoQ:'', kaderSub:'ok', showArchive:false, rezOpen:null, rezStack:[], rezFmt:'' };
 
 /* ================================================================ Login */
 $('#loginForm').addEventListener('submit', async ev => {
@@ -680,12 +698,13 @@ function tabList(){
 function renderTabs(){
   $('#tabs').innerHTML = tabList().map(([k,l]) =>
     `<button class="tab" role="tab" data-tab="${k}" aria-selected="${S.tab===k}">${ICONS[k]}<span>${l}</span>${k==='kader' && S.openCount ? `<span class="badge">${S.openCount}</span>`:''}${k==='plan' && S.swapIn ? `<span class="badge">${S.swapIn}</span>`:''}${k==='info' && S.infoUnread ? `<span class="badge">${S.infoUnread}</span>`:''}</button>`).join('');
-  $('#tabs').querySelectorAll('.tab').forEach(b => b.onclick = () => go(b.dataset.tab));
+  $('#tabs').querySelectorAll('.tab').forEach(b => b.onclick = () => { S.rezOpen = null; S.rezStack = []; go(b.dataset.tab); });
 }
 function go(tab){
   if (!tabList().some(t => t[0]===tab)) tab = 'plan';
   if (typeof hcPadClose === 'function') hcPadClose();
   if (S.hc && (tab !== 'info' || S.tab !== 'info')) { hcSave(); S.hc = null; }
+  if (tab !== 'info') { S.rezOpen = null; S.rezStack = []; }
   S.tab = tab; renderTabs(); window.scrollTo(0,0);
   return ({plan:viewPlan, team:viewTeam, wish:viewWish, info:viewInfo, kader:viewKader})[tab]();
 }
@@ -943,7 +962,7 @@ function renderAdmin(sp, us){
 }
 
 /* ================================================================ Infos */
-const CAT_LABEL = { 'News':'News', 'Kontakte & Notfall':'Kontakte', 'Abläufe & Regeln':'Abläufe', 'HACCP & Hygiene':'HACCP' };
+const CAT_LABEL = { 'News':'News', 'Kontakte & Notfall':'Kontakte', 'Abläufe & Regeln':'Abläufe', 'HACCP & Hygiene':'HACCP', 'Rezepte':'Rezepte' };
 function fmtText(t){
   const link = x => x.replace(/(https?:\/\/[^\s<]+)/g, u => `<a href="${u}" target="_blank" rel="noopener">${u.length > 48 ? u.slice(0,45)+'…' : u}</a>`);
   const out = []; let ul = [];
@@ -959,7 +978,8 @@ const telHref = p => 'tel:' + String(p).replace(/[^\d+]/g, '');
 function infoMeta(x){
   const bits = [];
   if (x.important) bits.push('<span class="chip c-Genehmigt">Wichtig</span>');
-  if (x.group && x.group !== 'Alle') bits.push(`<span class="chip c-Frei">${esc(x.group)}</span>`);
+  if (x.by === 'Rezepte') bits.push('<span class="chip c-Frei">🍳 Rezepte</span>');
+  else if (x.group && x.group !== 'Alle' && !x.group.includes(',')) bits.push(`<span class="chip c-Frei">${esc(x.group)}</span>`);
   if (x.audience === 'Kader') bits.push('<span class="chip c-Offen">nur Kader</span>');
   if (x.cat === 'News' && x.date) bits.push(`<span>${dmy(x.date)}${x.by ? ' · ' + esc(x.by) : ''}</span>`);
   return bits.length ? `<div class="info-meta">${bits.join('')}</div>` : '';
@@ -967,7 +987,8 @@ function infoMeta(x){
 function infoActions(x, d){
   const a = [];
   if (x.phone) a.push(`<a class="callbtn" href="${telHref(x.phone)}">📞 ${esc(x.phone)} anrufen</a>`);
-  if (x.link) a.push(`<a class="linkbtn" href="${esc(x.link)}" target="_blank" rel="noopener">${esc(x.linkText || 'Öffnen')} ↗</a>`);
+  if (x.link && x.link[0] === '?') a.push(`<button class="linkbtn" data-nav="${esc(x.link)}">${esc(x.linkText || 'Öffnen')} ›</button>`);
+  else if (x.link) a.push(`<a class="linkbtn" href="${esc(x.link)}" target="_blank" rel="noopener">${esc(x.linkText || 'Öffnen')} ↗</a>`);
   if (x.cat === 'News' || x.confirm) a.push(x.read ? '<span style="color:var(--kr-deep);font-weight:700">✓ Gelesen</span>' : `<button class="btn kr" data-read="${esc(x.id)}">Gelesen ✓</button>`);
   if (d.canPost && x.confirm) a.push(`<button class="btn ghost sm" data-readers="${esc(x.id)}">Gelesen: ${x.readCount || 0} – wer?</button>`);
   if (d.canPost && x.cat === 'News' && (S.user.role === 'Admin' || x.by === S.user.name)) a.push(`<button class="btn danger sm" data-del-news="${esc(x.id)}">Löschen</button>`);
@@ -980,6 +1001,7 @@ function renderInfo(x, d){
 }
 function viewInfo(){
   if (S.hc) return renderHaccpForm();
+  if (S.rezOpen) return viewRezept();
   return swr('infos', {}, () => S.tab === 'info', renderInfoView, 'Infos konnten nicht geladen werden.');
 }
 function renderInfoView(d){
@@ -992,6 +1014,8 @@ function renderInfoView(d){
     <div id="infoList" style="display:grid;gap:12px"></div>`;
   $('#infoQ').oninput = e => { S.infoQ = e.target.value; renderInfoList(); };
   if (d.canPost) $('#newsNew').onclick = newsDialog;
+  if (d.cats.includes('Rezepte') && !S.rezData) loadRez().then(() => { if (S.tab === 'info' && !S.rezOpen && (S.infoQ.trim() || S.infoCat === 'Rezepte')) renderInfoList(); });
+  if (!d.cats.includes(S.infoCat)) S.infoCat = 'News';
   renderInfoList();
 }
 function renderInfoList(){
@@ -1000,15 +1024,20 @@ function renderInfoList(){
   $('#infoChips').innerHTML = q ? '' : d.cats.map(c => `<button class="chipbtn" data-cat="${esc(c)}" aria-pressed="${S.infoCat===c}">${esc(CAT_LABEL[c]||c)}${unreadBy(c) ? ` · ${unreadBy(c)} neu` : ''}</button>`).join('');
   document.querySelectorAll('[data-cat]').forEach(b => b.onclick = () => { S.infoCat = b.dataset.cat; renderInfoList(); });
   const hb = $('#hcBox'); if (hb) { if (!q && S.infoCat === 'HACCP & Hygiene') loadHaccpBox(); else hb.innerHTML = ''; }
+  if (!q && S.infoCat === 'Rezepte') { renderRezList(); return; }
+  const rezHits = q && d.cats.includes('Rezepte') && S.rezData ? rezHtml(S.rezData, q) : '';
   let items = q ? d.items.filter(x => (x.title + ' ' + x.text + ' ' + x.cat).toLowerCase().includes(q)) : d.items.filter(x => x.cat === S.infoCat);
   const archived = (!q && S.infoCat === 'News') ? items.filter(x => x.read && x.by !== S.user.name) : [];
   if (archived.length) items = items.filter(x => !archived.includes(x));
   const arch = archived.length ? `<button class="btn ghost" id="archToggle">${S.showArchive ? 'Gelesene Mitteilungen ausblenden' : `Gelesene Mitteilungen anzeigen (${archived.length})`}</button>
     ${S.showArchive ? archived.map(x => renderInfo(x, d)).join('') : ''}` : '';
-  $('#infoList').innerHTML = (items.length ? items.map(x => (q ? `<div class="label">${esc(CAT_LABEL[x.cat]||x.cat)}</div>` : '') + renderInfo(x, d)).join('')
+  $('#infoList').innerHTML = rezHits + (items.length ? items.map(x => (q ? `<div class="label">${esc(CAT_LABEL[x.cat]||x.cat)}</div>` : '') + renderInfo(x, d)).join('')
     : (!q && S.infoCat === 'HACCP & Hygiene') ? ''
+    : rezHits ? ''
     : `<div class="card"><p class="empty" style="margin:0">${q ? 'Nichts gefunden.' : S.infoCat === 'News' && archived.length ? 'Alles gelesen. 👍' : 'Noch keine Einträge in dieser Kategorie.'}</p></div>`) + arch;
   const at = $('#archToggle'); if (at) at.onclick = () => { S.showArchive = !S.showArchive; renderInfoList(); };
+  bindRez($('#infoList'));
+  document.querySelectorAll('[data-nav]').forEach(b => b.onclick = () => applyNav(b.dataset.nav));
   document.querySelectorAll('[data-read]').forEach(b => b.onclick = async () => {
     b.disabled = true;
     try { await call('infoRead', { id: b.dataset.read }); const x = d.items.find(i => i.id === b.dataset.read); x.read = true; if (d.canPost) x.readCount = (x.readCount||0) + 1;
@@ -1051,6 +1080,77 @@ function newsDialog(){
         closeSheet(); toast('Mitteilung veröffentlicht'); S.infoCat = 'News'; S.infoQ = ''; viewInfo(); }
       catch(e){ $('#nSend').disabled = false; }
     }; });
+}
+
+/* ================================================================ Rezepte (aus der Kalkulation, ohne Preise) */
+const REZ_KAT = { 'Vorspeise':'Vorspeisen', 'Hauptgericht':'Hauptgerichte', 'Beilage':'Beilagen', 'Dessert':'Desserts', 'Getränk':'Getränke', 'Apero':'Apero', 'Bankett':'Bankett', 'Halbfabrikat':'Grundrezepte & Halbfabrikate' };
+function rezQty(m, e){
+  const n = x => String(Math.round(x * 1000) / 1000);
+  if (!m) return e ? '– ' + e : '';
+  if (e === 'kg' && m < 1) return n(m * 1000) + ' g';
+  if (e === 'l' && m < 1) return n(m * 1000) + ' ml';
+  return n(m) + (e ? ' ' + e : '');
+}
+const rezRecent = x => x.d && (Date.now() - parseIso(x.d)) < 14 * 864e5;
+const rezYieldUnit = x => x.z.some(z => z.e === 'l') && !x.z.some(z => z.e === 'kg') ? 'l' : 'kg';
+async function loadRez(){
+  const k = CACHE.get(cacheKey('rezepte', {})); if (k && !S.rezData) S.rezData = JSON.parse(k.json);
+  try { const d = await getData('rezepte'); if (d) { putCache(cacheKey('rezepte', {}), d); S.rezData = d; } } catch(e) { if (!S.rezData) throw e; }
+  return S.rezData;
+}
+function rezRow(x, showFmt){
+  const sub = [x.z.length + ' Zutat' + (x.z.length === 1 ? '' : 'en'), x.p.length ? 'Zubereitung' : 'ohne Zubereitung'];
+  if (showFmt) sub.unshift(esc(x.f));
+  return `<button class="rez-row" data-rez="${esc(x.k)}"><span class="t"><b>${esc(x.n)}</b><small>${sub.join(' · ')}</small></span>${rezRecent(x) ? '<span class="chip c-Offen">angepasst</span>' : ''}<span class="go" aria-hidden="true">›</span></button>`;
+}
+/* Liste: bei Suche alle Treffer, sonst nach Format-Filter, gruppiert nach Kategorie */
+function rezHtml(d, q){
+  let items = d.items;
+  if (q) {
+    items = items.filter(x => (x.n + ' ' + x.f + ' ' + x.z.map(z => z.n).join(' ') + ' ' + x.p.join(' ')).toLowerCase().includes(q));
+    return items.length ? `<div class="label">Rezepte</div><div class="card rez-list">${items.slice(0, 30).map(x => rezRow(x, d.formats.length > 1)).join('')}</div>` : '';
+  }
+  const multi = d.formats.length > 1;
+  if (multi && S.rezFmt) items = items.filter(x => x.f === S.rezFmt);
+  const groups = [];
+  items.forEach(x => { const key = (multi && !S.rezFmt ? x.f + ' · ' : '') + (REZ_KAT[x.c] || x.c || 'Weitere'); let g = groups.find(y => y.key === key); if (!g) groups.push(g = { key, list: [] }); g.list.push(x); });
+  return groups.map(g => `<div class="label">${esc(g.key)}</div><div class="card rez-list">${g.list.map(x => rezRow(x, false)).join('')}</div>`).join('');
+}
+function renderRezList(){
+  const el = $('#infoList'); if (!el) return;
+  const d = S.rezData;
+  if (!d) { el.innerHTML = '<div class="spinner" aria-label="Lädt"></div>'; loadRez().then(() => { if (S.tab === 'info' && S.infoCat === 'Rezepte' && !S.rezOpen) renderInfoList(); }).catch(e => { const x = $('#infoList'); if (x) x.innerHTML = `<p class="empty">Rezepte konnten nicht geladen werden.</p>`; }); return; }
+  const multi = d.formats.length > 1;
+  if (S.rezFmt && !d.formats.includes(S.rezFmt)) S.rezFmt = '';
+  const filt = multi ? `<div class="chips" id="rezFmts"><button class="chipbtn" data-fmt="" aria-pressed="${!S.rezFmt}">Alle</button>${d.formats.map(f => `<button class="chipbtn" data-fmt="${esc(f)}" aria-pressed="${S.rezFmt === f}">${esc(f)}</button>`).join('')}</div>` : '';
+  el.innerHTML = filt + (d.items.length ? rezHtml(d, '') : '<div class="card"><p class="empty" style="margin:0">Für deine Filiale sind noch keine Rezepte erfasst.</p></div>');
+  el.querySelectorAll('[data-fmt]').forEach(b => b.onclick = () => { S.rezFmt = b.dataset.fmt; renderRezList(); });
+  bindRez(el);
+}
+function bindRez(root){ if (root) root.querySelectorAll('[data-rez]').forEach(b => b.onclick = () => { S.rezOpen = b.dataset.rez; S.rezStack = []; viewInfo(); window.scrollTo(0, 0); }); }
+async function viewRezept(){
+  if (!S.rezData) { $('#view').innerHTML = '<div class="spinner" aria-label="Lädt"></div>'; try { await loadRez(); } catch(e) {} }
+  if (S.tab !== 'info' || !S.rezOpen) return;
+  renderRezept();
+}
+function renderRezept(){
+  const d = S.rezData, x = d && d.items.find(i => i.k === S.rezOpen);
+  if (!x) { S.rezOpen = null; S.rezStack = []; if (d) toast('Dieses Rezept ist nicht (mehr) in der App.'); return viewInfo(); }
+  const byK = {}; d.items.forEach(i => { byK[i.k] = i; });
+  const prev = S.rezStack.length ? byK[S.rezStack[S.rezStack.length - 1]] : null;
+  const hf = x.c === 'Halbfabrikat';
+  $('#view').innerHTML = `
+    <button class="btn ghost sm" id="rezBack" style="justify-self:start">‹ ${prev ? esc(prev.n) : 'Alle Rezepte'}</button>
+    <div class="view-head"><h2 style="font-size:26px;text-transform:none">${esc(x.n)}</h2></div>
+    <div class="info-meta"><span class="chip c-Frei">${esc(x.s)}</span><span class="chip">${esc(x.c || 'Rezept')}</span>${rezRecent(x) ? `<span class="chip c-Offen">angepasst ${dm(x.d)}</span>` : ''}</div>
+    <div class="card"><div class="label">Zutaten · ${hf ? (x.y ? 'ergibt ' + rezQty(x.y, rezYieldUnit(x)) : 'ganzes Rezept') : 'pro Portion'}</div>
+      ${x.z.length ? `<table class="rez-tab">${x.z.map(z => `<tr><td>${z.r && byK[z.r] ? `<button class="rez-link" data-sub="${esc(z.r)}">${esc(z.n)}</button>` : esc(z.n)}${z.b ? `<span class="note">${esc(z.b)}</span>` : ''}</td><td class="q">${esc(rezQty(z.m, z.e))}</td></tr>`).join('')}</table>` : '<p class="empty" style="margin:0">Keine Zutaten erfasst.</p>'}
+      ${x.z.some(z => z.r && byK[z.r]) ? '<p class="small muted" style="margin:0">Unterstrichen = eigenes Rezept, antippen zum Öffnen.</p>' : ''}</div>
+    <div class="card"><div class="label">Zubereitung</div>
+      ${x.p.length ? `<ol class="rez-steps">${x.p.map(t => `<li>${esc(t)}</li>`).join('')}</ol>` : '<p class="empty" style="margin:0">Die Zubereitung wird noch erfasst.</p>'}</div>
+    ${x.d ? `<p class="small muted" style="margin:0">Stand: zuletzt angepasst am ${dmy(x.d)}</p>` : ''}`;
+  $('#rezBack').onclick = () => { S.rezOpen = S.rezStack.pop() || null; viewInfo(); window.scrollTo(0, 0); };
+  document.querySelectorAll('[data-sub]').forEach(b => b.onclick = () => { S.rezStack.push(x.k); S.rezOpen = b.dataset.sub; renderRezept(); window.scrollTo(0, 0); });
 }
 
 /* ================================================================ Push-Benachrichtigungen */
@@ -1129,6 +1229,8 @@ function applyNav(url){
     if (q.get('mon')) S.planMon = q.get('mon');
     if (q.get('cat') === 'news') S.infoCat = 'News';
     if (q.get('cat') === 'haccp') S.infoCat = 'HACCP & Hygiene';
+    if (q.get('cat') === 'rezepte') { S.infoCat = 'Rezepte'; S.infoQ = ''; S.rezOpen = null; S.rezStack = []; }
+    if (q.get('rez')) { S.infoCat = 'Rezepte'; S.infoQ = ''; S.rezOpen = q.get('rez'); S.rezStack = []; }
     if (q.get('sub')) S.kaderSub = q.get('sub');
     S.tab = q.get('tab');
     if (S.user) go(S.tab);
@@ -1624,6 +1726,7 @@ function demoInit(){
     ],
     infos:[
       { id:'N1', cat:'News', title:'Willkommen im Kitchen Reunion Hub', text:'Hier findest du ab sofort deinen Dienstplan, kannst Freiwünsche eingeben und siehst alle wichtigen Infos.\n- Dienstplan unter «Mein Plan»\n- Freiwünsche im Kalender eingeben', group:'Alle', audience:'Alle', important:true, confirm:true, date:todayIso(), by:'Adrian', reads:[] },
+      { id:'R1', cat:'News', title:'Rezept angepasst: Pad Thai', text:'Gilt ab sofort.\n\n- Geändert: Lauch 30 g → 40 g\n- Entfernt: Chinakohl\n- Zubereitung Schritt 1 (neu): Wok stark erhitzen, Esterhazy und Pak Choi kurz anbraten.', link:'?tab=info&rez=pad%20thai', linkText:'Rezept öffnen', group:'Shoppyland, Welle 7, Shoppi Tivoli', audience:'Alle', important:false, confirm:true, date:todayIso(), by:'Rezepte', reads:[] },
       { id:'N2', cat:'News', title:'Weihnachtsstand im Tivoli', text:'Ab Dezember Mittwoch bis Sonntag geöffnet. Einsätze werden im Dienstplan angezeigt.', group:'Shoppi Tivoli', audience:'Alle', important:false, confirm:false, date:todayIso(), by:'Michelle', reads:[] },
       { id:'K1', cat:'Kontakte & Notfall', title:'Notfallnummern', text:'- Sanität: 144\n- Polizei: 117\n- Feuerwehr: 118\n- Tox Info Suisse: 145\n- Rega: 1414', phone:'144', group:'Alle', audience:'Alle', important:true, confirm:false, reads:[] },
       { id:'K2', cat:'Kontakte & Notfall', title:'Operations Manager – Adrian', text:'Bei Fragen zu Dienstplan, Ware und Abläufen.', phone:'079 000 00 00', group:'Alle', audience:'Alle', important:false, confirm:false, reads:[] },
@@ -1633,6 +1736,15 @@ function demoInit(){
     sperr:[ { id:'S1', date:isoOf(addDays(new Date(), 30)), group:'Alle', reason:'Inventur', by:'Adrian' }, { id:'S2', date:isoOf(addDays(new Date(), 31)), group:'Alle', reason:'Inventur', by:'Adrian' } ] };
 }
 const GROUPS = ['Shoppyland','Welle 7','Shoppi Tivoli','Kitchen Reunion Ebikon','Stücki Park',"Hardy's Strampi"];
+const DEMO_REZ = [
+  { k:'pad thai', n:'Pad Thai', s:'Thai Wok Kitchen', f:'Thai Wok Kitchen', c:'Hauptgericht', y:0, d:todayIso(), z:[
+    { n:'Reisnudeln eingeweicht', m:0.14, e:'kg', b:'', r:'reisnudeln eingeweicht' }, { n:'Pad Thai Sauce', m:0.14, e:'kg', b:'' }, { n:'Esterhazy', m:0.03, e:'kg', b:'' },
+    { n:'Lauch', m:0.04, e:'kg', b:'inkl. Garnitur' }, { n:'Mungosprossen', m:0.02, e:'kg', b:'' }, { n:'Pak Choi', m:0.02, e:'kg', b:'' }, { n:'Thai Brühe', m:0.005, e:'l', b:'' } ],
+    p:['Wok stark erhitzen, Esterhazy und Pak Choi kurz anbraten.', 'Reisnudeln und Thai Brühe beigeben, mit der Pad Thai Sauce ablöschen.', 'Mungosprossen und Lauch unterheben, sofort anrichten.'] },
+  { k:'gelbes thai curry', n:'Gelbes Thai Curry', s:'Thai Wok Kitchen', f:'Thai Wok Kitchen', c:'Hauptgericht', y:0, d:'2026-10-01', z:[ { n:'Curry Sauce Gelb', m:0.2, e:'kg', b:'' }, { n:'Gemüsemischung', m:0.16, e:'kg', b:'' }, { n:'Jasminreis gekocht', m:0.2, e:'kg', b:'' } ], p:[] },
+  { k:'reisnudeln eingeweicht', n:'Reisnudeln eingeweicht', s:'Thai Wok Kitchen', f:'Thai Wok Kitchen', c:'Halbfabrikat', y:1, d:'2026-10-01', z:[ { n:'Reisnudeln', m:0.5, e:'kg', b:'' } ], p:['Reisnudeln 30 Minuten in lauwarmem Wasser einweichen.', 'Abgiessen und portionieren.'] },
+  { k:'taco duo', n:'Taco Duo', s:'Guapo Mexicano', f:'Guapo Mexicano', c:'Hauptgericht', y:0, d:'2026-10-01', z:[ { n:'Tortilla Weizen', m:2, e:'Stk', b:'' }, { n:'Pulled Beef', m:0.08, e:'kg', b:'' }, { n:'Salsa rojo', m:0.03, e:'kg', b:'' } ], p:['Tortillas auf der Plancha erwärmen.', 'Füllen und mit Salsa servieren.'] },
+];
 function demoPublic(u){
   const groups = u.role === 'Admin' || u.group === 'Springer' ? GROUPS.slice() : u.role === 'Filialleitung' ? [...new Set([u.group].concat(u.filialen))] : [u.group];
   const approves = u.role === 'Admin' ? GROUPS.concat(['Springer']) : u.role === 'Filialleitung' ? u.filialen : [];
@@ -1770,11 +1882,15 @@ async function demoApi(req){
       case 'adminUsers': return { ok:true, data: DB.users.map(x => ({ name:x.name, role:x.role, stamm:x.stamm, filialen:x.filialen, active:true, pinSet:x.pinSet })) };
       case 'adminSetPin': { const x = DB.users.find(y => y.name===req.name); x.pin = String(Math.floor(100000 + Math.random()*900000)); x.pinSet = dmy(today); return { ok:true, data:{ pin:x.pin } }; }
       case 'infos': {
-        const vis = x => x.active !== false && (x.audience !== 'Kader' || ['Filialleitung','Admin'].includes(u.role)) && (x.group === 'Alle' || P.groups.includes(x.group));
+        const vis = x => x.active !== false && (x.audience !== 'Kader' || ['Filialleitung','Admin'].includes(u.role)) && (x.group === 'Alle' || x.group.split(', ').some(g => P.groups.includes(g)));
         const kad = ['Filialleitung','Admin'].includes(u.role);
         const items = DB.infos.filter(vis).map(x => Object.assign({}, x, { read: x.reads.includes(u.name), readCount: kad ? x.reads.length : undefined, reads: undefined }))
           .sort((a,b) => (b.important - a.important) || (a.cat === 'News' && b.cat === 'News' ? (a.date < b.date ? 1 : -1) : 0));
-        return { ok:true, data:{ items, cats:['News','Kontakte & Notfall','HACCP & Hygiene'], canPost:kad, postGroups: u.role === 'Admin' ? ['Alle'].concat(GROUPS) : P.approves } };
+        return { ok:true, data:{ items, cats:['News','Kontakte & Notfall','HACCP & Hygiene','Rezepte'], canPost:kad, postGroups: u.role === 'Admin' ? ['Alle'].concat(GROUPS) : P.approves } };
+      }
+      case 'rezepte': {
+        const fm = u.role === 'Admin' || u.group === 'Springer' ? ['Guapo Mexicano','Thai Wok Kitchen'] : u.group === 'Shoppi Tivoli' ? ['Guapo Mexicano','Thai Wok Kitchen'] : ['Thai Wok Kitchen'];
+        return { ok:true, data:{ formats: fm, at: today, items: DEMO_REZ.filter(x => fm.includes(x.f)) } };
       }
       case 'haccp': case 'haccpKader': case 'haccpSubmit': case 'haccpAck': case 'haccpDetail': {
         DB.hc = DB.hc || { cfg: DEMO_HC, checks: [], devs: [] };
